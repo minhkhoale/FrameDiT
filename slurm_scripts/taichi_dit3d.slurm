@@ -13,4 +13,4 @@ source ~/.bashrc
 
 conda activate latte
 
-srun python my_train.py --config ./configs/taichi/latte/taichi_train.yaml
+srun python my_train.py --config ./configs/taichi/dit3d/taichi_train.yaml

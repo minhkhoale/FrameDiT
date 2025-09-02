@@ -3,6 +3,7 @@ preprocess
 results
 results_img
 sample_videos
+wandb
 
 
 __pycache__/

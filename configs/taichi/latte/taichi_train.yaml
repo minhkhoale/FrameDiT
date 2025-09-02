@@ -1,8 +1,11 @@
 # dataset
 dataset: "taichi"
 
-data_path: "/path/to/datasets/taichi"
-pretrained_model_path: "/path/to/pretrained/Latte/" # Please download pre-trained models from https://huggingface.co/maxin-cn/Latte/tree/main
+data_path: "/scratch/s224075134/temporal_diffusion/datasets/video/taichi/train"
+latent_path: "/scratch/s224075134/temporal_diffusion/datasets/video/taichi_latent_32_kl_f8_autoencoder/train"
+load_latent: False
+
+pretrained_model_path: "/scratch/s224075134/temporal_diffusion/Latte/sd-vae-ft-ema" # Please download pre-trained models from https://huggingface.co/maxin-cn/Latte/tree/main
 
 # save and load
 results_dir: "./results"
@@ -40,3 +43,6 @@ use_compile: False
 mixed_precision: False
 enable_xformers_memory_efficient_attention: False
 gradient_checkpointing: False
+
+# Wandb logger
+project: 

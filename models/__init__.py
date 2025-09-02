@@ -5,6 +5,8 @@ sys.path.append(os.path.split(sys.path[0])[0])
 from .latte import Latte_models
 from .latte_img import LatteIMG_models
 from .latte_t2v import LatteT2V
+from .full_attn import DiT3D_models
+from .diff_latte import DifferenceLatte_models
 
 from torch.optim.lr_scheduler import LambdaLR
 
@@ -29,24 +31,41 @@ def get_lr_scheduler(optimizer, name, **kwargs):
         raise NotImplementedError(name)
     
 def get_models(args):
-    if 'LatteIMG' in args.model:
-        return LatteIMG_models[args.model](
+    match args.model.split('-')[0]:
+        case 'LatteIMG':
+            return LatteIMG_models[args.model](
+                    input_size=args.latent_size,
+                    num_classes=args.num_classes,
+                    num_frames=args.num_frames,
+                    learn_sigma=args.learn_sigma,
+                    extras=args.extras
+                )
+        case 'LatteT2V':
+            return LatteT2V.from_pretrained(args.pretrained_model_path, subfolder="transformer", video_length=args.video_length)
+        case 'Latte':
+            return Latte_models[args.model](
+                    input_size=args.latent_size,
+                    num_classes=args.num_classes,
+                    num_frames=args.num_frames,
+                    learn_sigma=args.learn_sigma,
+                    extras=args.extras
+                )
+        case 'DiT3D':
+            return DiT3D_models[args.model](
                 input_size=args.latent_size,
                 num_classes=args.num_classes,
                 num_frames=args.num_frames,
                 learn_sigma=args.learn_sigma,
                 extras=args.extras
             )
-    elif 'LatteT2V' in args.model:
-        return LatteT2V.from_pretrained(args.pretrained_model_path, subfolder="transformer", video_length=args.video_length)
-    elif 'Latte' in args.model:
-        return Latte_models[args.model](
+        case 'DiffLatte':
+            return DifferenceLatte_models[args.model](
                 input_size=args.latent_size,
                 num_classes=args.num_classes,
                 num_frames=args.num_frames,
                 learn_sigma=args.learn_sigma,
                 extras=args.extras
             )
-    else:
-        raise '{} Model Not Supported!'.format(args.model)
+        case _:
+            raise '{} Model Not Supported!'.format(args.model)
     
