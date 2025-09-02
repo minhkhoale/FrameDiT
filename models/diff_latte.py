@@ -155,12 +155,12 @@ class LabelEmbedder(nn.Module):
 
 
 #################################################################################
-#                                 Core DifferenceLatte Model                                #
+#                                 Core DiffLatte Model                                #
 #################################################################################
 
 class TransformerBlock(nn.Module):
     """
-    A DifferenceLatte tansformer block with adaptive layer norm zero (adaLN-Zero) conditioning.
+    A DiffLatte tansformer block with adaptive layer norm zero (adaLN-Zero) conditioning.
     """
     def __init__(self, hidden_size, num_heads, mlp_ratio=4.0, **block_kwargs):
         super().__init__()
@@ -184,7 +184,7 @@ class TransformerBlock(nn.Module):
 
 class FinalLayer(nn.Module):
     """
-    The final layer of DifferenceLatte.
+    The final layer of DiffLatte.
     """
     def __init__(self, hidden_size, patch_size, out_channels):
         super().__init__()
@@ -202,7 +202,7 @@ class FinalLayer(nn.Module):
         return x
 
 
-class DifferenceLatte(nn.Module):
+class DiffLatte(nn.Module):
     """
     Diffusion model with a Transformer backbone.
     """
@@ -229,7 +229,7 @@ class DifferenceLatte(nn.Module):
         self.patch_size = patch_size
         self.num_heads = num_heads
         self.extras = extras
-        self.num_frames = num_frames
+        self.num_frames = num_frames*2 - 1
 
         self.x_embedder = PatchEmbed(input_size, patch_size, in_channels, hidden_size, bias=True)
         self.t_embedder = TimestepEmbedder(hidden_size)
@@ -246,7 +246,7 @@ class DifferenceLatte(nn.Module):
         num_patches = self.x_embedder.num_patches
         # Will use fixed sin-cos embedding:
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size), requires_grad=False)
-        self.temp_embed = nn.Parameter(torch.zeros(1, num_frames, hidden_size), requires_grad=False)
+        self.temp_embed = nn.Parameter(torch.zeros(1, self.num_frames, hidden_size), requires_grad=False)
         self.hidden_size =  hidden_size
 
         self.blocks = nn.ModuleList([
@@ -318,7 +318,7 @@ class DifferenceLatte(nn.Module):
         idx = torch.zeros((batches, frames), dtype=torch.long, device=x.device)
         diff_idx = torch.ones((batches, frames-1), dtype=torch.long, device=x.device)
         idx = rearrange(combine_frames_and_difference(idx, diff_idx), "b t -> (b t)")
-        emb = self.frame_difference_embedder(idx)
+        emb = self.frame_difference_embedder(idx, self.training)
         emb = rearrange(emb, "(b t) c -> b t c", b=batches)
         return emb
 
@@ -340,13 +340,12 @@ class DifferenceLatte(nn.Module):
             x = x.to(dtype=torch.float16)
 
         batches, frames, channels, high, weight = x.shape
+        frame_diff_embed = self.create_frame_difference_embedding(x) # 5, 31, 1152
 
-        x = rearrange(x, 'b f c h w -> ')
+        x = rearrange(x, 'b f c h w -> (b f) c h w')
         x = self.x_embedder(x) + self.pos_embed 
-
-        frame_diff_embed = self.create_frame_difference_embedding(x)
-        x = rearrange(x, '(b f) n d -> (b n) f d') + frame_diff_embed
-        x = rearrange(x, '(b n) f d -> (b f) n d')
+        x = rearrange(x, '(b f) n d -> (b n) f d', b=batches, f=frames) + repeat(frame_diff_embed, 'b f d -> (b n) f d', n=self.pos_embed.shape[1]) # 5x256, 16, 1152
+        x = rearrange(x, '(b n) f d -> (b f) n d', b=batches, f=frames)
 
         t = self.t_embedder(t, use_fp16=use_fp16)              
         timestep_spatial = repeat(t, 'n d -> (n c) d', c=self.temp_embed.shape[1]) 
@@ -480,48 +479,48 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
 #                                   DifferenceLatte Configs                                  #
 #################################################################################
 
-def DifferenceLatte_XL_2(**kwargs):
-    return DifferenceLatte(depth=28, hidden_size=1152, patch_size=2, num_heads=16, **kwargs)
+def DiffLatte_XL_2(**kwargs):
+    return DiffLatte(depth=28, hidden_size=1152, patch_size=2, num_heads=16, **kwargs)
 
-def DifferenceLatte_XL_4(**kwargs):
-    return DifferenceLatte(depth=28, hidden_size=1152, patch_size=4, num_heads=16, **kwargs)
+def DiffLatte_XL_4(**kwargs):
+    return DiffLatte(depth=28, hidden_size=1152, patch_size=4, num_heads=16, **kwargs)
 
-def DifferenceLatte_XL_8(**kwargs):
-    return DifferenceLatte(depth=28, hidden_size=1152, patch_size=8, num_heads=16, **kwargs)
+def DiffLatte_XL_8(**kwargs):
+    return DiffLatte(depth=28, hidden_size=1152, patch_size=8, num_heads=16, **kwargs)
 
-def DifferenceLatte_L_2(**kwargs):
-    return DifferenceLatte(depth=24, hidden_size=1024, patch_size=2, num_heads=16, **kwargs)
+def DiffLatte_L_2(**kwargs):
+    return DiffLatte(depth=24, hidden_size=1024, patch_size=2, num_heads=16, **kwargs)
 
-def DifferenceLatte_L_4(**kwargs):
-    return DifferenceLatte(depth=24, hidden_size=1024, patch_size=4, num_heads=16, **kwargs)
+def DiffLatte_L_4(**kwargs):
+    return DiffLatte(depth=24, hidden_size=1024, patch_size=4, num_heads=16, **kwargs)
 
-def DifferenceLatte_L_8(**kwargs):
-    return DifferenceLatte(depth=24, hidden_size=1024, patch_size=8, num_heads=16, **kwargs)
+def DiffLatte_L_8(**kwargs):
+    return DiffLatte(depth=24, hidden_size=1024, patch_size=8, num_heads=16, **kwargs)
 
-def DifferenceLatte_B_2(**kwargs):
-    return DifferenceLatte(depth=12, hidden_size=768, patch_size=2, num_heads=12, **kwargs)
+def DiffLatte_B_2(**kwargs):
+    return DiffLatte(depth=12, hidden_size=768, patch_size=2, num_heads=12, **kwargs)
 
-def DifferenceLatte_B_4(**kwargs):
-    return DifferenceLatte(depth=12, hidden_size=768, patch_size=4, num_heads=12, **kwargs)
+def DiffLatte_B_4(**kwargs):
+    return DiffLatte(depth=12, hidden_size=768, patch_size=4, num_heads=12, **kwargs)
 
-def DifferenceLatte_B_8(**kwargs):
-    return DifferenceLatte(depth=12, hidden_size=768, patch_size=8, num_heads=12, **kwargs)
+def DiffLatte_B_8(**kwargs):
+    return DiffLatte(depth=12, hidden_size=768, patch_size=8, num_heads=12, **kwargs)
 
-def DifferenceLatte_S_2(**kwargs):
-    return DifferenceLatte(depth=12, hidden_size=384, patch_size=2, num_heads=6, **kwargs)
+def DiffLatte_S_2(**kwargs):
+    return DiffLatte(depth=12, hidden_size=384, patch_size=2, num_heads=6, **kwargs)
 
-def DifferenceLatte_S_4(**kwargs):
-    return DifferenceLatte(depth=12, hidden_size=384, patch_size=4, num_heads=6, **kwargs)
+def DiffLatte_S_4(**kwargs):
+    return DiffLatte(depth=12, hidden_size=384, patch_size=4, num_heads=6, **kwargs)
 
-def DifferenceLatte_S_8(**kwargs):
-    return DifferenceLatte(depth=12, hidden_size=384, patch_size=8, num_heads=6, **kwargs)
+def DiffLatte_S_8(**kwargs):
+    return DiffLatte(depth=12, hidden_size=384, patch_size=8, num_heads=6, **kwargs)
 
 
-DifferenceLatte_models = {
-    'DifferenceLatte-XL/2': DifferenceLatte_XL_2,  'DifferenceLatte-XL/4': DifferenceLatte_XL_4,  'DifferenceLatte-XL/8': DifferenceLatte_XL_8,
-    'DifferenceLatte-L/2':  DifferenceLatte_L_2,   'DifferenceLatte-L/4':  DifferenceLatte_L_4,   'DifferenceLatte-L/8':  DifferenceLatte_L_8,
-    'DifferenceLatte-B/2':  DifferenceLatte_B_2,   'DifferenceLatte-B/4':  DifferenceLatte_B_4,   'DifferenceLatte-B/8':  DifferenceLatte_B_8,
-    'DifferenceLatte-S/2':  DifferenceLatte_S_2,   'DifferenceLatte-S/4':  DifferenceLatte_S_4,   'DifferenceLatte-S/8':  DifferenceLatte_S_8,
+DiffLatte_models = {
+    'DiffLatte-XL/2': DiffLatte_XL_2,  'DiffLatte-XL/4': DiffLatte_XL_4,  'DiffLatte-XL/8': DiffLatte_XL_8,
+    'DiffLatte-L/2':  DiffLatte_L_2,   'DiffLatte-L/4':  DiffLatte_L_4,   'DiffLatte-L/8':  DiffLatte_L_8,
+    'DiffLatte-B/2':  DiffLatte_B_2,   'DiffLatte-B/4':  DiffLatte_B_4,   'DiffLatte-B/8':  DiffLatte_B_8,
+    'DiffLatte-S/2':  DiffLatte_S_2,   'DiffLatte-S/4':  DiffLatte_S_4,   'DiffLatte-S/8':  DiffLatte_S_8,
 }
 
 if __name__ == '__main__':
@@ -533,7 +532,7 @@ if __name__ == '__main__':
     img = torch.randn(3, 16, 4, 32, 32).to(device)
     t = torch.tensor([1, 2, 3]).to(device)
     y = torch.tensor([1, 2, 3]).to(device)
-    network = DifferenceLatte_XL_2().to(device)
+    network = DiffLatte_XL_2().to(device)
     from thop import profile 
     flops, params = profile(network, inputs=(img, t))
     print('FLOPs = ' + str(flops/1000**3) + 'G')

@@ -6,7 +6,7 @@ from .latte import Latte_models
 from .latte_img import LatteIMG_models
 from .latte_t2v import LatteT2V
 from .full_attn import DiT3D_models
-from .diff_latte import DifferenceLatte_models
+from .diff_latte import DiffLatte_models
 
 from torch.optim.lr_scheduler import LambdaLR
 
@@ -59,7 +59,7 @@ def get_models(args):
                 extras=args.extras
             )
         case 'DiffLatte':
-            return DifferenceLatte_models[args.model](
+            return DiffLatte_models[args.model](
                 input_size=args.latent_size,
                 num_classes=args.num_classes,
                 num_frames=args.num_frames,

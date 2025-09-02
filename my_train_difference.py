@@ -101,8 +101,8 @@ def main(args):
     model = get_models(args)
     
     diffusion = create_diffusion(timestep_respacing="")  # default: 1000 steps, linear noise schedule
-    # vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-ema").to(device)
-    vae = AutoencoderKL.from_pretrained(args.pretrained_model_path, subfolder="vae").to(device)
+    vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-ema").to(device)
+    # vae = AutoencoderKL.from_pretrained(args.pretrained_model_path, subfolder="vae").to(device)
 
     # # use pretrained model?
     if args.pretrained:
@@ -228,6 +228,7 @@ def main(args):
 
             # Get difference
             diff = get_difference(x)
+            #TODO: add diff norm
             x = combine_frames_and_difference(x, diff, combine_type='interleave')
 
             # TODO: add condition for action dataset
@@ -240,7 +241,7 @@ def main(args):
 
             t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
             loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
-            xs_loss, diff_loss = uncombine_frames_and_difference(loss_dict['loss'].detach())
+            xs_loss, diff_loss = uncombine_frames_and_difference(loss_dict['element_wise_loss'].detach())
 
             loss = loss_dict["loss"].mean() / args.gradient_accumulation_steps
             loss.backward()
@@ -283,10 +284,10 @@ def main(args):
                 dist.all_reduce(avg_diff_loss, op=dist.ReduceOp.SUM)
                 avg_diff_loss = avg_diff_loss.item() / dist.get_world_size()
 
-                logger.info(f"(step={train_steps:07d}/epoch={epoch:04d}) Train Loss: {avg_loss:.4f}, Gradient Norm: {gradient_norm:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
+                logger.info(f"(step={train_steps:07d}/epoch={epoch:04d}) Train Loss: {avg_loss:.4f}, Xs Loss: {avg_xs_loss:.4f}, Diff Loss: {avg_diff_loss:.4f}, Gradient Norm: {gradient_norm:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
 
                 if wandb.run is not None:
-                    wandb.log({"train/loss": avg_loss, "train/grad_norm": gradient_norm}, step=train_steps)
+                    wandb.log({"train/loss": avg_loss, "train/xs_loss": avg_xs_loss, "train/diff_loss": avg_diff_loss, "train/grad_norm": gradient_norm}, step=train_steps)
                 # Reset monitoring variables:
                 running_loss = 0
                 running_xs_loss = 0

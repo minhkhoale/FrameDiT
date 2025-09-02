@@ -73,8 +73,8 @@ def main(args):
         model_string_name = args.model.replace("/", "-")  # e.g., Latte-XL/2 --> Latte-XL-2 (for naming folders)
         num_frame_string = 'F' + str(args.num_frames) + 'S' + str(args.frame_interval)
 
-        experiment_name = f"{experiment_index:03d}-{model_string_name}-{num_frame_string}-{args.dataset}"
-        experiment_dir = f"{args.results_dir}/{experiment_name}"  # Create an experiment folder
+        experiment_name = f"{experiment_index:03d}-{model_string_name}-{num_frame_string}-{args.dataset}{args.image_size}"
+        experiment_dir = f"{args.results_dir}/{args.dataset}{args.image_size}/{experiment_name}"  # Create an experiment folder
         experiment_dir = get_experiment_dir(experiment_dir, args)
 
         checkpoint_dir = f"{experiment_dir}/checkpoints"  # Stores saved model checkpoints
@@ -97,8 +97,8 @@ def main(args):
     model = get_models(args)
     
     diffusion = create_diffusion(timestep_respacing="")  # default: 1000 steps, linear noise schedule
-    # vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-ema").to(device)
-    vae = AutoencoderKL.from_pretrained(args.pretrained_model_path, subfolder="vae").to(device)
+    vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-ema").to(device)
+    # vae = AutoencoderKL.from_pretrained(args.pretrained_model_path, subfolder="vae").to(device)
 
     # # use pretrained model?
     if args.pretrained:
@@ -201,6 +201,7 @@ def main(args):
     if args.pretrained:
         train_steps = int(args.pretrained.split("/")[-1].split('.')[0])
 
+    total_start_time = time()
     for epoch in range(first_epoch, num_train_epochs):
         sampler.set_epoch(epoch)
         for step, video_data in enumerate(loader):
@@ -259,7 +260,7 @@ def main(args):
                 avg_loss = torch.tensor(running_loss / log_steps, device=device)
                 dist.all_reduce(avg_loss, op=dist.ReduceOp.SUM)
                 avg_loss = avg_loss.item() / dist.get_world_size()
-                logger.info(f"(step={train_steps:07d}/epoch={epoch:04d}) Train Loss: {avg_loss:.4f}, Gradient Norm: {gradient_norm:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
+                logger.info(f"(step={train_steps:07d}/epoch={epoch:04d}) Train Loss: {avg_loss:.4f}, Gradient Norm: {gradient_norm:.4f}, Train Steps/Sec: {steps_per_sec:.2f}, ETA: {(time()-total_start_time):.2f}")
 
                 if wandb.run is not None:
                     wandb.log({"train/loss": avg_loss, "train/grad_norm": gradient_norm}, step=train_steps)

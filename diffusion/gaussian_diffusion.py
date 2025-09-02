@@ -784,7 +784,8 @@ class GaussianDiffusion:
                 ModelMeanType.EPSILON: noise,
             }[self.model_mean_type]
             assert model_output.shape == target.shape == x_start.shape
-            terms["mse"] = mean_flat((target - model_output) ** 2)
+            terms["element_wise_loss"] = (target - model_output) ** 2 
+            terms["mse"] = mean_flat(terms["element_wise_loss"])
             if "vb" in terms:
                 terms["loss"] = terms["mse"] + terms["vb"]
             else:
