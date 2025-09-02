@@ -36,7 +36,8 @@ from torch.utils.data.distributed import DistributedSampler
 from utils import (clip_grad_norm_, create_logger, update_ema, 
                    requires_grad, cleanup, create_tensorboard, 
                    write_tensorboard, setup_distributed,
-                   get_experiment_dir, text_preprocessing)
+                   get_experiment_dir,
+                   get_training_noise_level)
 import numpy as np
 from transformers import T5EncoderModel, T5Tokenizer
 import wandb
@@ -81,11 +82,10 @@ def main(args):
         os.makedirs(checkpoint_dir, exist_ok=True)
 
         logger = create_logger(experiment_dir)
-        # tb_writer = create_tensorboard(experiment_dir)
         OmegaConf.save(args, os.path.join(experiment_dir, 'config.yaml'))
         logger.info(f"Experiment directory created at {experiment_dir}")
 
-        wandb.init(project=args.project, name=experiment_name) if args.project else None
+        wandb.init(project=args.project, name=experiment_name, tags=['video_generation', model_string_name, f"{args.dataset}{args.image_size}", "training"]) if args.project else None
     else:
         logger = create_logger(None)
         # tb_writer = None
@@ -230,8 +230,14 @@ def main(args):
                 model_kwargs = dict(y=video_name)
             else:
                 model_kwargs = dict(y=None)
-
-            t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
+        
+            #t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
+            t = get_training_noise_level(
+                batches=x.shape[0], frames=x.shape[1], 
+                device=device, num_timesteps=diffusion.num_timesteps, 
+                noise_level=args.noise_level, variable_context_prob=args.get('variable_context_prob'), noise_level_fixed_context_prob=args.get('noise_level_fixed_context_prob'),
+                fixed_context_length=args.get('fixed_context_length')
+            )
             loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
             loss = loss_dict["loss"].mean() / args.gradient_accumulation_steps
             loss.backward()

@@ -13,11 +13,11 @@ import enum
 from .diffusion_utils import discretized_gaussian_log_likelihood, normal_kl
 
 
-def mean_flat(tensor):
+def mean_flat(tensor, start_dim=1):
     """
     Take the mean over all non-batch dimensions.
     """
-    return tensor.mean(dim=list(range(1, len(tensor.shape))))
+    return tensor.mean(dim=list(range(start_dim, len(tensor.shape))))
 
 
 class ModelMeanType(enum.Enum):
@@ -275,7 +275,7 @@ class GaussianDiffusion:
             model_kwargs = {}
 
         B, F, C = x.shape[:3]
-        assert t.shape == (B,)
+        # assert t.shape == (B,)
         model_output = model(x, t, **model_kwargs)
         # try:
         #     model_output = model_output.sample # for tav unet
@@ -703,17 +703,20 @@ class GaussianDiffusion:
         kl = normal_kl(
             true_mean, true_log_variance_clipped, out["mean"], out["log_variance"]
         )
-        kl = mean_flat(kl) / np.log(2.0)
+        kl = mean_flat(kl, start_dim=2) / np.log(2.0)
 
         decoder_nll = -discretized_gaussian_log_likelihood(
             x_start, means=out["mean"], log_scales=0.5 * out["log_variance"]
         )
         assert decoder_nll.shape == x_start.shape
-        decoder_nll = mean_flat(decoder_nll) / np.log(2.0)
+        decoder_nll = mean_flat(decoder_nll, start_dim=2) / np.log(2.0)
 
         # At the first timestep return the decoder NLL,
         # otherwise return KL(q(x_{t-1}|x_t,x_0) || p(x_{t-1}|x_t))
+        if t.dim() == 1:
+            t = t[:, None]
         output = th.where((t == 0), decoder_nll, kl)
+        output = mean_flat(output, start_dim=1)
         return {"output": output, "pred_xstart": out["pred_xstart"]}
 
     def training_losses(self, model, x_start, t, model_kwargs=None, noise=None):

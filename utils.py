@@ -7,6 +7,9 @@ import subprocess
 import numpy as np
 import torch.distributed as dist
 
+from typing import Optional
+from torch.types import _size
+
 from torch import inf
 from PIL import Image
 from typing import Union, Iterable
@@ -14,6 +17,7 @@ from collections import OrderedDict
 from torch.utils.tensorboard import SummaryWriter   
 
 from diffusers.utils import is_bs4_available, is_ftfy_available
+from einops import repeat
 
 import html
 import re
@@ -140,6 +144,46 @@ def get_experiment_dir(root_dir, args):
     if args.image_size == 512:
         root_dir += '-512'
     return root_dir
+
+#################################################################################
+#                      Train Noise Level                                        #
+#################################################################################
+def bernoulli_tensor(
+    size: _size,
+    p: float,
+    device: Optional[torch.device] = None,
+    generator: Optional[torch.Generator] = None,
+):
+    """
+    Generate a tensor of the given size,
+    where each element is sampled from a Bernoulli distribution with probability `p`.
+    """
+    return torch.bernoulli(torch.full(size, p, device=device), generator=generator)
+
+
+def get_training_noise_level(batches, frames, device, num_timesteps=1000, noise_level='random_uniform', **kwargs):
+    match noise_level:
+        case 'random_uniform':
+            t = torch.randint(0, num_timesteps, (batches,), device=device)
+            t = repeat(t, 'b -> b f', f=frames)
+        case 'random_uniform_variable_context':
+            t = torch.randint(0, num_timesteps, (batches,), device=device)
+            t = repeat(t, 'b -> b f', f=frames)
+            context_mask = bernoulli_tensor((batches, frames), p=kwargs.get('noise_level_variable_context_prob'), device=device).bool()
+            context_noise_level = torch.zeros((batches,1), device=device)
+            t = torch.where(context_mask, context_noise_level, t)
+        case 'random_uniform_fixed_context':
+            t = torch.randint(0, num_timesteps, (batches,), device=device)
+            t = repeat(t, 'b -> b f', f=frames)
+            context_mask = bernoulli_tensor((batches, frames), p=kwargs.get('noise_level_fixed_context_prob'), device=device).bool()
+            context_mask[:, kwargs.get('fixed_context_length'):] = False
+            context_noise_level = torch.zeros((batches,1), device=device)
+            t = torch.where(context_mask, context_noise_level, t)
+        case 'random_independent':
+            t = torch.randint(0, num_timesteps, (batches, frames), device=device)
+        case _:
+            raise ValueError(f"Unknown noise level: {noise_level}")
+    return t.long()
 
 #################################################################################
 #                             Training Logger                                   #

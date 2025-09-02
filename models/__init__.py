@@ -7,6 +7,7 @@ from .latte_img import LatteIMG_models
 from .latte_t2v import LatteT2V
 from .full_attn import DiT3D_models
 from .diff_latte import DiffLatte_models
+from .latte_v2 import LatteV2_models
 
 from torch.optim.lr_scheduler import LambdaLR
 
@@ -34,21 +35,32 @@ def get_models(args):
     match args.model.split('-')[0]:
         case 'LatteIMG':
             return LatteIMG_models[args.model](
-                    input_size=args.latent_size,
-                    num_classes=args.num_classes,
-                    num_frames=args.num_frames,
-                    learn_sigma=args.learn_sigma,
-                    extras=args.extras
+                input_size=args.latent_size,
+                num_classes=args.num_classes,
+                num_frames=args.num_frames,
+                learn_sigma=args.learn_sigma,
+                in_channels=args.in_channels,
+                extras=args.extras
                 )
         case 'LatteT2V':
             return LatteT2V.from_pretrained(args.pretrained_model_path, subfolder="transformer", video_length=args.video_length)
         case 'Latte':
             return Latte_models[args.model](
-                    input_size=args.latent_size,
-                    num_classes=args.num_classes,
-                    num_frames=args.num_frames,
-                    learn_sigma=args.learn_sigma,
-                    extras=args.extras
+                input_size=args.latent_size,
+                num_classes=args.num_classes,
+                num_frames=args.num_frames,
+                learn_sigma=args.learn_sigma,
+                in_channels=args.in_channels,
+                extras=args.extras
+                )
+        case 'LatteV2':
+            return LatteV2_models[args.model](
+                input_size=args.latent_size,
+                num_classes=args.num_classes,
+                num_frames=args.num_frames,
+                learn_sigma=args.learn_sigma,
+                in_channels=args.in_channels,
+                extras=args.extras
                 )
         case 'DiT3D':
             return DiT3D_models[args.model](
@@ -56,6 +68,7 @@ def get_models(args):
                 num_classes=args.num_classes,
                 num_frames=args.num_frames,
                 learn_sigma=args.learn_sigma,
+                in_channels=args.in_channels,
                 extras=args.extras
             )
         case 'DiffLatte':
@@ -64,6 +77,7 @@ def get_models(args):
                 num_classes=args.num_classes,
                 num_frames=args.num_frames,
                 learn_sigma=args.learn_sigma,
+                in_channels=args.in_channels,
                 extras=args.extras
             )
         case _:
