@@ -1,12 +1,13 @@
 # path:
 ckpt: # will be overwrite
 save_img_path: "./sample_videos/" # will be overwrite
-pretrained_model_path: "/path/to/pretrained/Latte/"
+vae: "./configs/vae/autoencoder_kl.yaml"
 
 # model config: 
 model: Latte-XL/2
 num_frames: 16
 image_size: 256 # choices=[256, 512]
+in_channels: 4
 frame_interval: 2
 fixed_spatial: False
 attention_bias: True
@@ -16,7 +17,7 @@ num_classes:
 
 # model speedup
 use_compile: False
-use_fp16: True
+use_fp16: False
 
 # sample config:
 seed:
@@ -24,6 +25,13 @@ sample_method: 'ddpm'
 num_sampling_steps: 250
 cfg_scale: 1.0
 negative_name:
+
+local_batch_size: 16
+total_samples: 128
+
+# video config
+fps: 8
+video_quality: 9
 
 # ddp sample config
 per_proc_batch_size: 1

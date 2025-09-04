@@ -36,7 +36,6 @@ def decode_video(model: torch.nn.Module, latents: torch.Tensor):
     """
     x: (B,F,C,H,W).
     """
-    print('latents', latents.shape)
     B,F,C,H,W = latents.shape
     latents = rearrange(latents, 'b f c h w -> (b f) c h w')
     with torch.no_grad():
