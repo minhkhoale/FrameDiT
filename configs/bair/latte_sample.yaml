@@ -21,13 +21,17 @@ use_fp16: False
 
 # sample config:
 seed:
-sample_method: 'ddpm'
+sample_method: 'ddim'
 num_sampling_steps: 250
 cfg_scale: 1.0
 negative_name:
 
-local_batch_size: 4
+local_batch_size: 16
 total_samples: 128
+
+# video config
+fps: 8
+video_quality: 9
 
 # ddp sample config
 per_proc_batch_size: 1

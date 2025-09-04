@@ -26,6 +26,7 @@ from einops import rearrange
 from models import get_models
 from datasets import get_dataset
 from models.clip import TextEmbedder
+from vae import get_vae, encode_video
 from diffusion import create_diffusion
 from omegaconf import OmegaConf
 from torch.utils.data import DataLoader
@@ -36,11 +37,11 @@ from torch.utils.data.distributed import DistributedSampler
 from utils import (clip_grad_norm_, create_logger, update_ema, 
                    requires_grad, cleanup, create_tensorboard, 
                    write_tensorboard, setup_distributed,
-                   get_experiment_dir,
-                   get_training_noise_level)
+                   get_experiment_dir, text_preprocessing)
 import numpy as np
 from transformers import T5EncoderModel, T5Tokenizer
 import wandb
+os.environ['TORCH_DISTRIBUTED_DEBUG'] = 'DETAIL'
 
 #################################################################################
 #                                  Training Loop                                #
@@ -49,7 +50,7 @@ import wandb
 def main(args):
 
     assert torch.cuda.is_available(), "Training currently requires at least one GPU."
-
+    print('starting main')
     # Setup DDP:
     setup_distributed()
     # dist.init_process_group("nccl")
@@ -65,10 +66,15 @@ def main(args):
     seed = args.global_seed + rank
     torch.manual_seed(seed)
     torch.cuda.set_device(device)
-    print(f"Starting rank={rank}, local rank={local_rank}, seed={seed}, world_size={dist.get_world_size()}.")
+    print(f"Starting rank={rank}, local rank={local_rank}, seed={seed}, world_size={dist.get_world_size()}.")    
+    if args.debug:
+        print("===============================\nRunning in debug mode.\n===============================")
 
     # Setup an experiment folder:
     if rank == 0:
+        if args.debug:
+            args.results_dir = os.path.join(args.results_dir, 'debug')
+
         os.makedirs(args.results_dir, exist_ok=True)  # Make results folder (holds all experiment subfolders)
         experiment_index = len(glob(f"{args.results_dir}/*"))
         model_string_name = args.model.replace("/", "-")  # e.g., Latte-XL/2 --> Latte-XL-2 (for naming folders)
@@ -85,7 +91,8 @@ def main(args):
         OmegaConf.save(args, os.path.join(experiment_dir, 'config.yaml'))
         logger.info(f"Experiment directory created at {experiment_dir}")
 
-        wandb.init(project=args.project, name=experiment_name, tags=['video_generation', model_string_name, f"{args.dataset}{args.image_size}", "training"]) if args.project else None
+        project = "debug" if args.debug and args.project is not None else args.project
+        wandb.init(project=project, name=experiment_name, tags=['video_generation', model_string_name, f"{args.dataset}{args.image_size}", "training"]) if args.project else None
     else:
         logger = create_logger(None)
         # tb_writer = None
@@ -97,8 +104,8 @@ def main(args):
     model = get_models(args)
     
     diffusion = create_diffusion(timestep_respacing="")  # default: 1000 steps, linear noise schedule
-    vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-ema").to(device)
-    # vae = AutoencoderKL.from_pretrained(args.pretrained_model_path, subfolder="vae").to(device)
+
+    vae = get_vae(OmegaConf.load(args.vae)).to(device)
 
     # # use pretrained model?
     if args.pretrained:
@@ -175,6 +182,8 @@ def main(args):
     train_steps = 0
     log_steps = 0
     running_loss = 0
+    running_loss_mse = 0
+    running_loss_vb = 0
     first_epoch = 0
     start_time = time()
 
@@ -211,50 +220,42 @@ def main(args):
 
             x = video_data['video'].to(device, non_blocking=True)
             video_name = video_data['video_name']
-
+            
             if not args.load_latent:
-                with torch.no_grad():
-                    # Map input images to latent space + normalize latents:
-                    b, _, _, _, _ = x.shape
-                    x = rearrange(x, 'b f c h w -> (b f) c h w').contiguous()
-                    x = vae.encode(x).latent_dist.sample()
-                    x = rearrange(x, '(b f) c h w -> b f c h w', b=b).contiguous()
+                x = encode_video(vae, x)  # (B,F,C,H,W)
+            x = x.mul_(vae.scaler)
 
-            # TODO: change scaler for different VAE
-            x = x.mul_(0.18215)
-
-            # TODO: add condition for action dataset
             if args.extras == 78: # text-to-video
                 raise 'T2V training are Not supported at this moment!'
             elif args.extras == 2:
                 model_kwargs = dict(y=video_name)
             else:
                 model_kwargs = dict(y=None)
-        
-            #t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
-            t = get_training_noise_level(
-                batches=x.shape[0], frames=x.shape[1], 
-                device=device, num_timesteps=diffusion.num_timesteps, 
-                noise_level=args.noise_level, variable_context_prob=args.get('variable_context_prob'), noise_level_fixed_context_prob=args.get('noise_level_fixed_context_prob'),
-                fixed_context_length=args.get('fixed_context_length')
-            )
+
+            t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
             loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
             loss = loss_dict["loss"].mean() / args.gradient_accumulation_steps
             loss.backward()
+            # for logging
+            mse = loss_dict["mse"].mean().item()/ args.gradient_accumulation_steps if "mse" in loss_dict else 0.0
+            vb = loss_dict["vb"].mean().item()/ args.gradient_accumulation_steps if "vb" in loss_dict else 0.0
 
             if train_steps < args.start_clip_iter: # if train_steps >= start_clip_iter, will clip gradient
                 gradient_norm = clip_grad_norm_(model.module.parameters(), args.clip_max_norm, clip_grad=False)
             else:
                 gradient_norm = clip_grad_norm_(model.module.parameters(), args.clip_max_norm, clip_grad=True)
 
+            
             lr_scheduler.step()
             if train_steps % args.gradient_accumulation_steps == 0 and train_steps > 0:
                 opt.step()
                 opt.zero_grad()
                 update_ema(ema, model.module)
 
-            # Log loss values:
+            # Logging
             running_loss += loss.item()
+            running_loss_mse += mse
+            running_loss_vb += vb
             log_steps += 1
             train_steps += 1
             if train_steps % args.log_every == 0:
@@ -269,9 +270,19 @@ def main(args):
                 logger.info(f"(step={train_steps:07d}/epoch={epoch:04d}) Train Loss: {avg_loss:.4f}, Gradient Norm: {gradient_norm:.4f}, Train Steps/Sec: {steps_per_sec:.2f}, ETA: {(time()-total_start_time):.2f}")
 
                 if wandb.run is not None:
-                    wandb.log({"train/loss": avg_loss, "train/grad_norm": gradient_norm}, step=train_steps)
+                    logging_dict = {
+                        "train/loss": avg_loss,
+                        "train/grad_norm": gradient_norm
+                    }
+                    if 'mse' in loss_dict:
+                        logging_dict["train/loss_mse"] = running_loss_mse / log_steps
+                    if 'vb' in loss_dict:
+                        logging_dict["train/loss_vb"] = running_loss_vb / log_steps
+                    wandb.log(logging_dict, step=train_steps)
                 # Reset monitoring variables:
                 running_loss = 0
+                running_loss_mse = 0
+                running_loss_vb = 0
                 log_steps = 0
                 start_time = time()
 
@@ -299,5 +310,10 @@ if __name__ == "__main__":
     # Default args here will train Latte with the hyperparameters we used in our paper (except training iters).
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default="./configs/train.yaml")
+    parser.add_argument("--debug", action='store_true', help="If true, run in debug mode.")
     args = parser.parse_args()
-    main(OmegaConf.load(args.config))
+
+    configs = OmegaConf.load(args.config)
+    configs.debug = args.debug
+
+    main(configs)

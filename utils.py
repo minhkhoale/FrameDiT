@@ -7,7 +7,7 @@ import subprocess
 import numpy as np
 import torch.distributed as dist
 
-from typing import Optional
+from typing import Optional, List
 from torch.types import _size
 
 from torch import inf
@@ -18,6 +18,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from diffusers.utils import is_bs4_available, is_ftfy_available
 from einops import repeat
+import imageio
 
 import html
 import re
@@ -285,7 +286,8 @@ def setup_distributed(backend="nccl", port=None):
         world_size = int(os.environ["WORLD_SIZE"])
 
     # torch.cuda.set_device(rank % num_gpus)
-
+    print('master addr:', os.environ["MASTER_ADDR"])
+    print('master port:', os.environ["MASTER_PORT"])
     dist.init_process_group(
         backend=backend,
         world_size=world_size,
@@ -295,6 +297,16 @@ def setup_distributed(backend="nccl", port=None):
 #################################################################################
 #                             Testing  Utils                                    #
 #################################################################################
+
+def save_batch_videos(videos: torch.Tensor, paths: List[str], **kwargs):
+    """
+    videos shape (B,T,C,H,W)
+    paths: list of str
+    """
+    videos = ((videos * 0.5 + 0.5) * 255).add_(0.5).clamp_(0, 255).to(dtype=torch.uint8).cpu().permute(0, 1, 3, 4, 2).contiguous()
+    for i, path in enumerate(paths):
+        imageio.mimwrite(path, videos[i], **kwargs)
+
 
 def save_video_grid(video, nrow=None):
     b, t, h, w, c = video.shape

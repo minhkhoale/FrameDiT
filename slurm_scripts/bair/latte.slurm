@@ -14,4 +14,4 @@ source ~/.bashrc
 
 conda activate latte
 
-srun python train.py --config ./configs/bair/latte_train.yaml
+srun python my_train.py --config ./configs/bair/latte_train.yaml "$@"

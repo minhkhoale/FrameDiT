@@ -45,7 +45,7 @@ class BAIR(data.Dataset):
             video_clip = torch.from_numpy(frames).permute(0, 3, 1, 2)
         
         video_clip = self.transform(video_clip)
-        return {'video': video_clip, 'video_name': 1}
+        return {'video': video_clip, 'video_name': 1, 'video_path': video_path, 'start_frame_ind': start_frame_ind, 'end_frame_ind': end_frame_ind}
 
     @property
     def latent_path(self):

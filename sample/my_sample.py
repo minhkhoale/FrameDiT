@@ -12,14 +12,14 @@ try:
     import utils
 
     from diffusion import create_diffusion
-    from utils import find_model
+    from utils import find_model, save_batch_videos
     from vae import get_vae, decode_video
 except:
     sys.path.append(os.path.split(sys.path[0])[0])
 
     import utils
     from diffusion import create_diffusion
-    from utils import find_model
+    from utils import find_model, save_batch_videos
     from vae import get_vae, decode_video
 
 import torch
@@ -113,13 +113,12 @@ def main(args):
         
         if args.use_fp16:
             samples = samples.to(dtype=torch.float16)
+        
         samples = decode_video(vae, samples/vae.scaler)
+        video_paths = [os.path.join(args.save_video_path, f'video_{step*local_batch_size + i}' + '.mp4') for i in range(local_batch_size)]
+        save_batch_videos(samples, video_paths, fps=args.fps, quality=args.video_quality)
 
-        video_ = ((samples[0] * 0.5 + 0.5) * 255).add_(0.5).clamp_(0, 255).to(dtype=torch.uint8).cpu().permute(0, 2, 3, 1).contiguous()
-        video_save_path = os.path.join(args.save_video_path, f'video_{step}' + '.mp4')
-        imageio.mimwrite(video_save_path, video_, fps=8, quality=9)
-
-        if step % 10 == 0:
+        if step % 5 == 0:
             print(f'sample {step}/{num_batches} done!')
     
     print('save path {}'.format(args.save_video_path))

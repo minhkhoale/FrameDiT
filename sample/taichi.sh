@@ -1,7 +1,7 @@
 #!/bin/bash
-export CUDA_VISIBLE_DEVICES=7
+export CUDA_VISIBLE_DEVICES=0
 
-python sample/sample.py \
---config ./configs/taichi/taichi_sample.yaml \
---ckpt  ./share_ckpts/taichi-hd.pt \
---save_video_path ./test
+python sample/my_sample.py \
+--config ./configs/taichi/latte/taichi_sample.yaml \
+--ckpt  /scratch/s224075134/temporal_diffusion/Latte/results/027-Latte-XL-2-F16S3-taichi/checkpoints/0200000.pt \
+--save_video_path ./test/taichi_latte
