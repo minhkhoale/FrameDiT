@@ -26,6 +26,9 @@ num_sampling_steps: 250
 cfg_scale: 1.0
 negative_name:
 
+local_batch_size: 4
+total_samples: 128
+
 # ddp sample config
 per_proc_batch_size: 1
 num_fvd_samples: 2
