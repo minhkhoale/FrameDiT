@@ -13,13 +13,14 @@ try:
 
     from diffusion import create_diffusion
     from utils import find_model
+    from vae import get_vae, decode_video
 except:
     sys.path.append(os.path.split(sys.path[0])[0])
 
     import utils
-
     from diffusion import create_diffusion
     from utils import find_model
+    from vae import get_vae, decode_video
 
 import torch
 import argparse
@@ -39,6 +40,7 @@ torch.backends.cudnn.allow_tf32 = True
 def main(args):
     # Setup PyTorch:
     # torch.manual_seed(args.seed)
+    args.use_fp16 = False
     torch.set_grad_enabled(False)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     # device = "cpu"
@@ -65,9 +67,10 @@ def main(args):
 
     model.eval()  # important!
     diffusion = create_diffusion(str(args.num_sampling_steps))
-    # vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-{args.vae}").to(device)
-    vae = AutoencoderKL.from_pretrained(args.pretrained_model_path, subfolder="vae").to(device)
+    # vae = AutoencoderKL.from_pretrained(args.pretrained_model_path).to(device)
+    # vae = AutoencoderKL.from_pretrained(args.pretrained_model_path, subfolder="vae").to(device)
     # text_encoder = TextEmbedder().to(device)
+    vae = get_vae(OmegaConf.load(args.vae)).to(device)
 
     if args.use_fp16:
         print('WARNING: using half percision for inferencing!')
@@ -79,9 +82,9 @@ def main(args):
 
     # Create sampling noise:
     if args.use_fp16:
-        z = torch.randn(1, args.num_frames, 4, latent_size, latent_size, dtype=torch.float16, device=device) # b c f h w
+        z = torch.randn(1, args.num_frames, args.in_channels, latent_size, latent_size, dtype=torch.float16, device=device) # b c f h w
     else:
-        z = torch.randn(1, args.num_frames, 4, latent_size, latent_size, device=device)
+        z = torch.randn(1, args.num_frames, args.in_channels, latent_size, latent_size, device=device)
 
     # Setup classifier-free guidance:
     # z = torch.cat([z, z], 0)
@@ -110,14 +113,12 @@ def main(args):
     if args.use_fp16:
         samples = samples.to(dtype=torch.float16)
     b, f, c, h, w = samples.shape
-    samples = rearrange(samples, 'b f c h w -> (b f) c h w')
-    samples = vae.decode(samples / 0.18215).sample
-    samples = rearrange(samples, '(b f) c h w -> b f c h w', b=b)
-    # Save and display images:
+
+    samples = decode_video(vae, samples/vae.scaler)
+    print('samples', samples.min(), samples.max(), samples.shape)
 
     if not os.path.exists(args.save_video_path):
         os.makedirs(args.save_video_path)
-
 
     video_ = ((samples[0] * 0.5 + 0.5) * 255).add_(0.5).clamp_(0, 255).to(dtype=torch.uint8).cpu().permute(0, 2, 3, 1).contiguous()
     video_save_path = os.path.join(args.save_video_path, 'sample' + '.mp4')
