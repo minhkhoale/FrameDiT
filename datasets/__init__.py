@@ -1,6 +1,7 @@
 from .sky_datasets import Sky
 from torchvision import transforms
 from .taichi_datasets import Taichi
+from .bair_datasets import BAIR
 from datasets import video_transforms
 from .ucf101_datasets import UCF101
 from .ffs_datasets import FaceForensics
@@ -80,5 +81,17 @@ def get_dataset(args):
                     transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
             ])
         return SkyImages(args, transform=transform_sky, temporal_sample=temporal_sample)
+    elif args.dataset == 'bair':
+        if args.load_latent:
+            transform_bair = transforms.Compose([
+                video_transforms.RandomHorizontalFlipVideo(),
+            ])
+        else:
+            transform_bair = transforms.Compose([
+                video_transforms.ToTensorVideo(), # TCHW
+                video_transforms.RandomHorizontalFlipVideo(),
+                transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
+            ])
+        return BAIR(args, transform=transform_bair, temporal_sample=temporal_sample)
     else:
         raise NotImplementedError(args.dataset)

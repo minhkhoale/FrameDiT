@@ -26,6 +26,7 @@ from einops import rearrange
 from models import get_models
 from datasets import get_dataset
 from models.clip import TextEmbedder
+from vae import get_vae, encode_video
 from diffusion import create_diffusion
 from omegaconf import OmegaConf
 from torch.utils.data import DataLoader
@@ -39,6 +40,7 @@ from utils import (clip_grad_norm_, create_logger, update_ema,
                    get_experiment_dir, text_preprocessing)
 import numpy as np
 from transformers import T5EncoderModel, T5Tokenizer
+os.environ['TORCH_DISTRIBUTED_DEBUG'] = 'DETAIL'
 
 #################################################################################
 #                                  Training Loop                                #
@@ -91,7 +93,8 @@ def main(args):
     
     diffusion = create_diffusion(timestep_respacing="")  # default: 1000 steps, linear noise schedule
     # vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-ema").to(device)
-    vae = AutoencoderKL.from_pretrained(args.pretrained_model_path, subfolder="vae").to(device)
+    # vae = AutoencoderKL.from_pretrained(args.pretrained_model_path, subfolder="vae").to(device)
+    vae = get_vae(OmegaConf.load(args.vae)).to(device)
 
     # # use pretrained model?
     if args.pretrained:
@@ -203,12 +206,11 @@ def main(args):
 
             x = video_data['video'].to(device, non_blocking=True)
             video_name = video_data['video_name']
-            with torch.no_grad():
-                # Map input images to latent space + normalize latents:
-                b, _, _, _, _ = x.shape
-                x = rearrange(x, 'b f c h w -> (b f) c h w').contiguous()
-                x = vae.encode(x).latent_dist.sample().mul_(0.18215)
-                x = rearrange(x, '(b f) c h w -> b f c h w', b=b).contiguous()
+            
+            if not args.load_latent:
+                x = encode_video(vae, x)  # (B,F,C,H,W)
+            # TODO: change scaler for different VAE
+            x = x.mul_(vae.scaler)
 
             if args.extras == 78: # text-to-video
                 raise 'T2V training are Not supported at this moment!'

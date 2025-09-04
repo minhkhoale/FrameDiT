@@ -83,7 +83,7 @@ class BAIR(data.Dataset):
                     latent_files.append(os.path.join(root, file))
 
         for latent_path in latent_files:
-            latent = torch.load(latent_path, weights_only=False)
+            latent = torch.load(latent_path, map_location='meta')
             n_frames = latent.shape[0]
             if n_frames > 0:
                 data_all.append((latent_path, n_frames))

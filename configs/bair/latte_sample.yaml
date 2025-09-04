@@ -1,0 +1,31 @@
+# path:
+ckpt: # will be overwrite
+save_img_path: "./sample_videos/" # will be overwrite
+vae: "./configs/vae/bair_dc_ae.yaml"
+
+# model config: 
+model: Latte-B/2
+num_frames: 16
+image_size: 64 # choices=[256, 512]
+in_channels: 32
+frame_interval: 1
+fixed_spatial: False
+attention_bias: True
+learn_sigma: True
+extras: 1 # [1, 2] 1 unconditional generation, 2 class-conditional generation
+num_classes:
+
+# model speedup
+use_compile: False
+use_fp16: False
+
+# sample config:
+seed:
+sample_method: 'ddpm'
+num_sampling_steps: 250
+cfg_scale: 1.0
+negative_name:
+
+# ddp sample config
+per_proc_batch_size: 1
+num_fvd_samples: 2
