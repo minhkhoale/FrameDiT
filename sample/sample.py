@@ -39,8 +39,7 @@ torch.backends.cudnn.allow_tf32 = True
 
 def main(args):
     # Setup PyTorch:
-    # torch.manual_seed(args.seed)
-    args.use_fp16 = False
+    torch.manual_seed(args.seed) if args.seed is not None
     torch.set_grad_enabled(False)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     # device = "cpu"

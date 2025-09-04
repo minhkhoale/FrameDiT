@@ -27,7 +27,7 @@ except:
 # from timm.models.layers.trace_utils import _assert
 
 def modulate(x, shift, scale):
-    return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
+    return x * (1 + scale) + shift
 
 #################################################################################
 #               Attention Layers from TIMM                                      #
@@ -176,9 +176,9 @@ class TransformerBlock(nn.Module):
         )
 
     def forward(self, x, c):
-        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=1)
-        x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
-        x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
+        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=-1)
+        x = x + gate_msa * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
+        x = x + gate_mlp * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
         return x
 
 
@@ -196,7 +196,7 @@ class FinalLayer(nn.Module):
         )
 
     def forward(self, x, c):
-        shift, scale = self.adaLN_modulation(c).chunk(2, dim=1)
+        shift, scale = self.adaLN_modulation(c).chunk(2, dim=-1)
         x = modulate(self.norm_final(x), shift, scale)
         x = self.linear(x)
         return x
@@ -229,7 +229,10 @@ class DiffLatte(nn.Module):
         self.patch_size = patch_size
         self.num_heads = num_heads
         self.extras = extras
-        self.num_frames = num_frames*2 - 1
+
+        self.num_frames = num_frames
+        self.num_diff = num_frames - 1
+        self.total_frames = num_frames + self.num_diff
 
         self.x_embedder = PatchEmbed(input_size, patch_size, in_channels, hidden_size, bias=True)
         self.t_embedder = TimestepEmbedder(hidden_size)
@@ -246,7 +249,7 @@ class DiffLatte(nn.Module):
         num_patches = self.x_embedder.num_patches
         # Will use fixed sin-cos embedding:
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size), requires_grad=False)
-        self.temp_embed = nn.Parameter(torch.zeros(1, self.num_frames, hidden_size), requires_grad=False)
+        self.temp_embed = nn.Parameter(torch.zeros(1, self.total_frames, hidden_size), requires_grad=False)
         self.hidden_size =  hidden_size
 
         self.blocks = nn.ModuleList([
@@ -276,8 +279,8 @@ class DiffLatte(nn.Module):
         w = self.x_embedder.proj.weight.data
         nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
         nn.init.constant_(self.x_embedder.proj.bias, 0)
-
         nn.init.normal_(self.frame_difference_embedder.embedding_table.weight, std=0.02)
+
         if self.extras == 2:
             # Initialize label embedding table:
             nn.init.normal_(self.y_embedder.embedding_table.weight, std=0.02)
@@ -286,7 +289,7 @@ class DiffLatte(nn.Module):
         nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
         nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
 
-        # Zero-out adaLN modulation layers in DifferenceLatte blocks:
+        # Zero-out adaLN modulation layers in DiffLatte blocks:
         for block in self.blocks:
             nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
             nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
@@ -313,6 +316,11 @@ class DiffLatte(nn.Module):
         return imgs
 
     def create_frame_difference_embedding(self, x):
+        """
+        Create frame difference embeddings for input video x.
+        x: (N, F, C, H, W) tensor of video inputs
+        output: (N, F, D) tensor of frame difference embeddings
+        """
         batches, frames = x.shape[:2]
         frames = frames//2 + 1
         idx = torch.zeros((batches, frames), dtype=torch.long, device=x.device)
@@ -331,7 +339,7 @@ class DiffLatte(nn.Module):
                 text_embedding=None, 
                 use_fp16=False):
         """
-        Forward pass of DifferenceLatte.
+        Forward pass of DiffLatte.
         x: (N, F, C, H, W) tensor of video inputs
         t: (N,) tensor of diffusion timesteps
         y: (N,) tensor of class labels
@@ -339,35 +347,34 @@ class DiffLatte(nn.Module):
         if use_fp16:
             x = x.to(dtype=torch.float16)
 
-        batches, frames, channels, high, weight = x.shape
-        frame_diff_embed = self.create_frame_difference_embedding(x) # 5, 31, 1152
+        batches, frames, channels, high, weight = x.shape 
+        frame_diff_embed = self.create_frame_difference_embedding(x) # B,F,D
+        frame_diff_embed_spatial = repeat(frame_diff_embed, 'b f d -> (b f) n d', n=self.pos_embed.shape[1])
+        frame_diff_embed_temp = repeat(frame_diff_embed, 'b f d -> (b n) f d', n=self.pos_embed.shape[1])
 
         x = rearrange(x, 'b f c h w -> (b f) c h w')
-        x = self.x_embedder(x) + self.pos_embed 
-        x = rearrange(x, '(b f) n d -> (b n) f d', b=batches, f=frames) + repeat(frame_diff_embed, 'b f d -> (b n) f d', n=self.pos_embed.shape[1]) # 5x256, 16, 1152
-        x = rearrange(x, '(b n) f d -> (b f) n d', b=batches, f=frames)
-
-        t = self.t_embedder(t, use_fp16=use_fp16)              
-        timestep_spatial = repeat(t, 'n d -> (n c) d', c=self.temp_embed.shape[1]) 
-        timestep_temp = repeat(t, 'n d -> (n c) d', c=self.pos_embed.shape[1])
+        x = self.x_embedder(x) + self.pos_embed
+        t = self.t_embedder(t, use_fp16=use_fp16)                  
+        timestep_spatial = repeat(t, 'b d -> (b f) n d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1]) 
+        timestep_temp = repeat(t, 'b d -> (b n) f d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1])
 
         if self.extras == 2:
             y = self.y_embedder(y, self.training)
-            y_spatial = repeat(y, 'n d -> (n c) d', c=self.temp_embed.shape[1]) 
-            y_temp = repeat(y, 'n d -> (n c) d', c=self.pos_embed.shape[1])
+            y_spatial = repeat(y, 'b d -> (b f) n d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1])
+            y_temp = repeat(y, 'b d -> (b n) f d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1])
         elif self.extras == 78:
             text_embedding = self.text_embedding_projection(text_embedding.reshape(batches, -1))
-            text_embedding_spatial = repeat(text_embedding, 'n d -> (n c) d', c=self.temp_embed.shape[1])
-            text_embedding_temp = repeat(text_embedding, 'n d -> (n c) d', c=self.pos_embed.shape[1])
+            text_embedding_spatial = repeat(text_embedding, 'b d -> (b f) n d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1])
+            text_embedding_temp = repeat(text_embedding, 'b d -> (b n) f d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1])
 
         for i in range(0, len(self.blocks), 2):
             spatial_block, temp_block = self.blocks[i:i+2]
             if self.extras == 2:
-                c = timestep_spatial + y_spatial
+                c = timestep_spatial + y_spatial + frame_diff_embed_spatial
             elif self.extras == 78:
-                c = timestep_spatial + text_embedding_spatial
+                c = timestep_spatial + text_embedding_spatial + frame_diff_embed_spatial
             else:
-                c = timestep_spatial
+                c = timestep_spatial + frame_diff_embed_spatial
             x  = spatial_block(x, c)
 
             x = rearrange(x, '(b f) t d -> (b t) f d', b=batches)
@@ -376,11 +383,11 @@ class DiffLatte(nn.Module):
                 x = x + self.temp_embed
 
             if self.extras == 2:
-                c = timestep_temp + y_temp
+                c = timestep_temp + y_temp + frame_diff_embed_temp
             elif self.extras == 78:
-                c = timestep_temp + text_embedding_temp
+                c = timestep_temp + text_embedding_temp + frame_diff_embed_temp
             else:
-                c = timestep_temp
+                c = timestep_temp + frame_diff_embed_temp
 
             x = temp_block(x, c)
             x = rearrange(x, '(b t) f d -> (b f) t d', b=batches)
@@ -396,7 +403,7 @@ class DiffLatte(nn.Module):
 
     def forward_with_cfg(self, x, t, y=None, cfg_scale=7.0, use_fp16=False, text_embedding=None):
         """
-        Forward pass of DifferenceLatte, but also batches the unconditional forward pass for classifier-free guidance.
+        Forward pass of DiffLatte, but also batches the unconditional forward pass for classifier-free guidance.
         """
         # https://github.com/openai/glide-text2im/blob/main/notebooks/text2im.ipynb
         half = x[: len(x) // 2]
@@ -476,7 +483,7 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
 
 
 #################################################################################
-#                                   DifferenceLatte Configs                                  #
+#                                   DiffLatte Configs                                  #
 #################################################################################
 
 def DiffLatte_XL_2(**kwargs):

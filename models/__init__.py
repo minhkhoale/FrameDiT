@@ -4,7 +4,7 @@ sys.path.append(os.path.split(sys.path[0])[0])
 
 from .latte import Latte_models
 from .latte_img import LatteIMG_models
-from .latte_t2v import LatteT2V
+# from .latte_t2v import LatteT2V
 from .full_attn import DiT3D_models
 from .diff_latte import DiffLatte_models
 from .latte_v2 import LatteV2_models
@@ -42,8 +42,8 @@ def get_models(args):
                 in_channels=args.in_channels,
                 extras=args.extras
                 )
-        case 'LatteT2V':
-            return LatteT2V.from_pretrained(args.pretrained_model_path, subfolder="transformer", video_length=args.video_length)
+        # case 'LatteT2V':
+        #     return LatteT2V.from_pretrained(args.pretrained_model_path, subfolder="transformer", video_length=args.video_length)
         case 'Latte':
             return Latte_models[args.model](
                 input_size=args.latent_size,

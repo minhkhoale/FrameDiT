@@ -20,7 +20,7 @@ use_compile: False
 use_fp16: False
 
 # sample config:
-seed:
+seed: 0
 sample_method: 'ddim'
 num_sampling_steps: 250
 cfg_scale: 1.0

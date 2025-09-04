@@ -6,7 +6,7 @@ def get_difference(frames):
     return frames[:, 1:] - frames[:, :-1]
 
 def combine_frames_and_difference(frames, diff, combine_type='interleave'):
-    assert diff.shape[1] == frames.shape[1] - 1, "diff must have one less time step than frames"
+    assert diff.shape[1] == frames.shape[1] - 1, f"diff shape {diff.shape} must have one less time step than frames {frames.shape}"
     match combine_type:
         case 'concat':
             return torch.cat([frames, diff], dim=1)

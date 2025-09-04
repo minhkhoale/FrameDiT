@@ -26,6 +26,7 @@ from einops import rearrange
 from models import get_models
 from datasets import get_dataset
 from models.clip import TextEmbedder
+from vae import get_vae, encode_video
 from diffusion import create_diffusion
 from omegaconf import OmegaConf
 from torch.utils.data import DataLoader
@@ -41,9 +42,7 @@ from models.diff_utils import *
 import numpy as np
 from transformers import T5EncoderModel, T5Tokenizer
 import wandb
-
-
-
+os.environ['TORCH_DISTRIBUTED_DEBUG'] = 'DETAIL'
 
 #################################################################################
 #                                  Training Loop                                #
@@ -52,14 +51,9 @@ import wandb
 def main(args):
 
     assert torch.cuda.is_available(), "Training currently requires at least one GPU."
-
+    print('starting main')
     # Setup DDP:
     setup_distributed()
-    # dist.init_process_group("nccl")
-    # assert args.global_batch_size % dist.get_world_size() == 0, f"Batch size must be divisible by world size."
-    # rank = dist.get_rank()
-    # device = rank % torch.cuda.device_count()
-    # local_rank = rank
 
     rank = int(os.environ["RANK"])
     local_rank = int(os.environ["LOCAL_RANK"])
@@ -68,28 +62,32 @@ def main(args):
     seed = args.global_seed + rank
     torch.manual_seed(seed)
     torch.cuda.set_device(device)
-    print(f"Starting rank={rank}, local rank={local_rank}, seed={seed}, world_size={dist.get_world_size()}.")
+    print(f"Starting rank={rank}, local rank={local_rank}, seed={seed}, world_size={dist.get_world_size()}.")    
+    if args.debug:
+        print("===============================\nRunning in debug mode.\n===============================")
 
     # Setup an experiment folder:
     if rank == 0:
-        os.makedirs(args.results_dir, exist_ok=True)  # Make results folder (holds all experiment subfolders)
-        experiment_index = len(glob(f"{args.results_dir}/*"))
+        if args.debug:
+            args.results_dir = os.path.join(args.results_dir, 'debug')
+
+        os.makedirs(f"{args.results_dir}/{args.dataset}{args.image_size}", exist_ok=True)  # Make results folder (holds all experiment subfolders)
+        experiment_index = len(glob(f"{args.results_dir}/{args.dataset}{args.image_size}/*"))
         model_string_name = args.model.replace("/", "-")  # e.g., Latte-XL/2 --> Latte-XL-2 (for naming folders)
         num_frame_string = 'F' + str(args.num_frames) + 'S' + str(args.frame_interval)
 
-        experiment_name = f"{experiment_index:03d}-{model_string_name}-{num_frame_string}-{args.dataset}"
-        experiment_dir = f"{args.results_dir}/{experiment_name}"  # Create an experiment folder
+        experiment_name = f"{experiment_index:03d}-{model_string_name}-{num_frame_string}-{args.dataset}{args.image_size}"
+        experiment_dir = f"{args.results_dir}/{args.dataset}{args.image_size}/{experiment_name}"  # Create an experiment folder
         experiment_dir = get_experiment_dir(experiment_dir, args)
-
         checkpoint_dir = f"{experiment_dir}/checkpoints"  # Stores saved model checkpoints
-        os.makedirs(checkpoint_dir, exist_ok=True)
+        os.makedirs(experiment_dir, exist_ok=True)
 
         logger = create_logger(experiment_dir)
-        # tb_writer = create_tensorboard(experiment_dir)
         OmegaConf.save(args, os.path.join(experiment_dir, 'config.yaml'))
         logger.info(f"Experiment directory created at {experiment_dir}")
 
-        wandb.init(project=args.project, name=experiment_name) if args.project else None
+        project = "debug" if args.debug and args.project is not None else args.project
+        wandb.init(project=project, name=experiment_name, tags=['video_generation', model_string_name, f"{args.dataset}{args.image_size}", "training"]) if args.project else None
     else:
         logger = create_logger(None)
         # tb_writer = None
@@ -101,8 +99,8 @@ def main(args):
     model = get_models(args)
     
     diffusion = create_diffusion(timestep_respacing="")  # default: 1000 steps, linear noise schedule
-    vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-ema").to(device)
-    # vae = AutoencoderKL.from_pretrained(args.pretrained_model_path, subfolder="vae").to(device)
+
+    vae = get_vae(OmegaConf.load(args.vae)).to(device)
 
     # # use pretrained model?
     if args.pretrained:
@@ -178,7 +176,19 @@ def main(args):
     # Variables for monitoring/logging purposes:
     train_steps = 0
     log_steps = 0
-    running_loss = 0
+
+    running_metrics = {
+        "loss": 0,
+        "xs_loss": 0,
+        "diff_loss": 0,
+        "mse": 0,
+        "xs_mse": 0,
+        "diff_mse": 0,
+        "vb": 0,
+        "xs_vb": 0,
+        "diff_vb": 0,
+    }
+
     first_epoch = 0
     start_time = time()
 
@@ -214,17 +224,10 @@ def main(args):
 
             x = video_data['video'].to(device, non_blocking=True)
             video_name = video_data['video_name']
-
+            
             if not args.load_latent:
-                with torch.no_grad():
-                    # Map input images to latent space + normalize latents:
-                    b, _, _, _, _ = x.shape
-                    x = rearrange(x, 'b f c h w -> (b f) c h w').contiguous()
-                    x = vae.encode(x).latent_dist.sample()
-                    x = rearrange(x, '(b f) c h w -> b f c h w', b=b).contiguous()
-
-            # TODO: change scaler for different VAE
-            x = x.mul_(0.18215)
+                x = encode_video(vae, x)  # (B,F,C,H,W)
+            x = x.mul_(vae.scaler)
 
             # Get difference
             diff = get_difference(x)
@@ -240,14 +243,9 @@ def main(args):
                 model_kwargs = dict(y=None)
 
             t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
-            loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
-            xs_loss, diff_loss = uncombine_frames_and_difference(loss_dict['element_wise_loss'].detach())
-
+            loss_dict = diffusion.diff_training_losses(model, x, t, model_kwargs)
             loss = loss_dict["loss"].mean() / args.gradient_accumulation_steps
             loss.backward()
-
-            xs_loss = xs_loss.mean() / args.gradient_accumulation_steps
-            diff_loss = diff_loss.mean() / args.gradient_accumulation_steps
 
             if train_steps < args.start_clip_iter: # if train_steps >= start_clip_iter, will clip gradient
                 gradient_norm = clip_grad_norm_(model.module.parameters(), args.clip_max_norm, clip_grad=False)
@@ -260,10 +258,24 @@ def main(args):
                 opt.zero_grad()
                 update_ema(ema, model.module)
 
-            # Log loss values:
-            running_loss += loss.item()
-            running_xs_loss = xs_loss.item()
-            running_diff_loss = diff_loss.item()
+            # for logging
+            xs_loss_no_mean, diff_loss_no_mean = uncombine_frames_and_difference(loss_dict["loss_no_mean"])
+            xs_mse_no_mean, diff_mse_no_mean = uncombine_frames_and_difference(loss_dict["mse_no_mean"]) if "mse_no_mean" in loss_dict else (None, None)
+            xs_vb_no_mean, diff_vb_no_mean = uncombine_frames_and_difference(loss_dict["vb_no_mean"]) if "vb_no_mean" in loss_dict else (None, None)
+            
+            running_metrics["vb"] += loss_dict["vb"].mean().item() / args.gradient_accumulation_steps if "vb" in loss_dict else 0.0
+            running_metrics["mse"] += loss_dict["mse"].mean().item() / args.gradient_accumulation_steps if "mse" in loss_dict else 0.0
+            running_metrics["loss"] += loss.item()
+
+            running_metrics["xs_vb"] += xs_vb_no_mean.mean().item() / args.gradient_accumulation_steps if xs_vb_no_mean is not None else 0.0
+            running_metrics["xs_mse"] += xs_mse_no_mean.mean().item() / args.gradient_accumulation_steps if xs_mse_no_mean is not None else 0.0
+            running_metrics["xs_loss"] += xs_loss_no_mean.mean().item() / args.gradient_accumulation_steps
+
+            running_metrics["diff_vb"] += diff_vb_no_mean.mean().item() / args.gradient_accumulation_steps if diff_vb_no_mean is not None else 0.0
+            running_metrics["diff_mse"] += diff_mse_no_mean.mean().item() / args.gradient_accumulation_steps if diff_mse_no_mean is not None else 0.0
+            running_metrics["diff_loss"] += diff_loss_no_mean.mean().item() / args.gradient_accumulation_steps
+
+            # Logging
             log_steps += 1
             train_steps += 1
             if train_steps % args.log_every == 0:
@@ -271,33 +283,37 @@ def main(args):
                 torch.cuda.synchronize()
                 end_time = time()
                 steps_per_sec = log_steps / (end_time - start_time)
-                # Reduce loss history over all processes:
-                avg_loss = torch.tensor(running_loss / log_steps, device=device)
-                dist.all_reduce(avg_loss, op=dist.ReduceOp.SUM)
-                avg_loss = avg_loss.item() / dist.get_world_size()
 
-                avg_xs_loss = torch.tensor(running_xs_loss / log_steps, device=device)
-                dist.all_reduce(avg_xs_loss, op=dist.ReduceOp.SUM)
-                avg_xs_loss = avg_xs_loss.item() / dist.get_world_size()
+                # Reduce running_metrics over all processes
+                reduced_metrics = {}
+                for k, v in running_metrics.items():
+                    t = torch.tensor(v, device=device)
+                    dist.all_reduce(t, op=dist.ReduceOp.SUM)
+                    reduced_metrics[k] = t.item() / dist.get_world_size() / log_steps
 
-                avg_diff_loss = torch.tensor(running_diff_loss / log_steps, device=device)
-                dist.all_reduce(avg_diff_loss, op=dist.ReduceOp.SUM)
-                avg_diff_loss = avg_diff_loss.item() / dist.get_world_size()
-
-                logger.info(f"(step={train_steps:07d}/epoch={epoch:04d}) Train Loss: {avg_loss:.4f}, Xs Loss: {avg_xs_loss:.4f}, Diff Loss: {avg_diff_loss:.4f}, Gradient Norm: {gradient_norm:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
+                logger.info(f"(step={train_steps:07d}/epoch={epoch:04d}) Loss: {reduced_metrics['loss']:.4f}, xs_loss: {reduced_metrics['xs_loss']:.4f}, diff_loss: {reduced_metrics['diff_loss']:.4f}, Gradient Norm: {gradient_norm:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
 
                 if wandb.run is not None:
-                    wandb.log({"train/loss": avg_loss, "train/xs_loss": avg_xs_loss, "train/diff_loss": avg_diff_loss, "train/grad_norm": gradient_norm}, step=train_steps)
+                    logging_dict = {
+                        "train/loss": reduced_metrics['loss'],
+                        "train/grad_norm": gradient_norm
+                    }
+                    for k, v in reduced_metrics.items():
+                        if v != 0:
+                            logging_dict[f"train/{k}"] = v
+
+                    wandb.log(logging_dict, step=train_steps)
                 # Reset monitoring variables:
-                running_loss = 0
-                running_xs_loss = 0
-                running_diff_loss = 0
+                for k in running_metrics:
+                    running_metrics[k] = 0.0
+
                 log_steps = 0
                 start_time = time()
 
             # Save Latte checkpoint:
             if train_steps % args.ckpt_every == 0 and train_steps > 0:
                 if rank == 0:
+                    os.makedirs(checkpoint_dir, exist_ok=True)
                     checkpoint = {
                         "model": model.module.state_dict(),
                         "ema": ema.state_dict(),
@@ -319,5 +335,10 @@ if __name__ == "__main__":
     # Default args here will train Latte with the hyperparameters we used in our paper (except training iters).
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default="./configs/train.yaml")
+    parser.add_argument("--debug", action='store_true', help="If true, run in debug mode.")
     args = parser.parse_args()
-    main(OmegaConf.load(args.config))
+
+    configs = OmegaConf.load(args.config)
+    configs.debug = args.debug
+
+    main(configs)
