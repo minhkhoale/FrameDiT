@@ -5,7 +5,7 @@ data_path: "/scratch/s224075134/temporal_diffusion/datasets/video/taichi/train"
 latent_path: "/scratch/s224075134/temporal_diffusion/datasets/video/taichi_latent_32_kl_f8_autoencoder/train"
 load_latent: True
 
-pretrained_model_path: "/scratch/s224075134/temporal_diffusion/Latte/sd-vae-ft-ema" # Please download pre-trained models from https://huggingface.co/maxin-cn/Latte/tree/main
+vae: "./configs/vae/autoencoder_kl.yaml"
 
 # save and load
 results_dir: "./results"
@@ -15,6 +15,7 @@ pretrained:
 model: DiffLatte-XL/2
 num_frames: 16
 image_size: 256 # choices=[256, 512]
+in_channels: 4
 num_sampling_steps: 250
 frame_interval: 3
 fixed_spatial: False
@@ -31,7 +32,7 @@ start_clip_iter: 500000
 local_batch_size: 5 # important
 max_train_steps: 1000000
 global_seed: 3407
-num_workers: 8
+num_workers: 6
 log_every: 50
 lr_warmup_steps: 0
 resume_from_checkpoint:
