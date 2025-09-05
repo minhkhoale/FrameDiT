@@ -5,6 +5,7 @@ sys.path.append(os.path.split(sys.path[0])[0])
 from .latte import Latte_models
 from .latte_img import LatteIMG_models
 # from .latte_t2v import LatteT2V
+from .mat_latte import MatLatte_models
 from .full_attn import DiT3D_models
 from .diff_latte import DiffLatte_models
 from .latte_v2 import LatteV2_models
@@ -73,6 +74,15 @@ def get_models(args):
             )
         case 'DiffLatte':
             return DiffLatte_models[args.model](
+                input_size=args.latent_size,
+                num_classes=args.num_classes,
+                num_frames=args.num_frames,
+                learn_sigma=args.learn_sigma,
+                in_channels=args.in_channels,
+                extras=args.extras
+            )
+        case 'MatLatte':
+            return MatLatte_models[args.model](
                 input_size=args.latent_size,
                 num_classes=args.num_classes,
                 num_frames=args.num_frames,
