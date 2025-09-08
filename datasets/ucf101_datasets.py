@@ -142,35 +142,26 @@ class UCF101(torch.utils.data.Dataset):
     def __init__(self, configs, transform=None, temporal_sample=None):
         self.configs = configs
         self.data_path = configs.data_path
-        self.video_lists = get_filelist(configs.data_path)
-        self.latent_lists = get_filelist(configs.latent_path) if configs.load_latent else None
+        self.target_video_len = self.configs.num_frames
+        self.video_lists = self.load_video_frames(configs.data_path)
 
         self.transform = transform
         self.temporal_sample = temporal_sample
-        self.target_video_len = self.configs.num_frames
         self.v_decoder = DecordInit()
         self.classes, self.class_to_idx = find_classes(self.data_path)
 
     def __getitem__(self, index):
-        if self.configs.load_latent:
-            path = self.latent_lists[index]
-        else:
-            path = self.video_lists[index]
+        path, total_frames = self.video_lists[index]
 
         class_name = path.split('/')[-2]
         class_index = self.class_to_idx[class_name]
 
-        if self.configs.load_latent:
-            vframes = torch.load(path)
-        else:
-            vframes, aframes, info = torchvision.io.read_video(filename=path, pts_unit='sec', output_format='TCHW')
-
-        total_frames = len(vframes)        
+        vframes, aframes, info = torchvision.io.read_video(filename=path, pts_unit='sec', output_format='TCHW')
+        total_frames = len(vframes)
         # Sampling video frames
         start_frame_ind, end_frame_ind = self.temporal_sample(total_frames)
         assert end_frame_ind - start_frame_ind >= self.target_video_len
         frame_indice = np.linspace(start_frame_ind, end_frame_ind-1, self.target_video_len, dtype=int)
-        # print(frame_indice)
         video = vframes[frame_indice] #
         video = self.transform(video) # T C H W
 
@@ -178,6 +169,23 @@ class UCF101(torch.utils.data.Dataset):
 
     def __len__(self):
         return len(self.video_lists)
+
+    def load_video_frames(self, dataroot):
+        data_all = []
+        # Find all mp4 files in dataroot (recursively)
+        video_files = []
+        for root, _, files in os.walk(dataroot):
+            for file in files:
+                if file.lower().endswith('.mp4'):
+                    video_files.append(os.path.join(root, file))
+
+        for video_path in video_files:
+            vr = decord.VideoReader(video_path, ctx=decord.cpu(0))
+            n_frames = len(vr)
+            if n_frames > self.target_video_len:
+                data_all.append((video_path, n_frames))
+            del vr
+        return data_all
 
 
 if __name__ == '__main__':

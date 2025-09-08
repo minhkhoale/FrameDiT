@@ -3,7 +3,7 @@ dataset: "taichi"
 
 data_path: "/scratch/s224075134/temporal_diffusion/datasets/video/taichi/train"
 latent_path: "/scratch/s224075134/temporal_diffusion/datasets/video/taichi_latent_32_kl_f8_autoencoder/train"
-load_latent: True
+load_latent: False
 
 vae: "./configs/vae/autoencoder_kl.yaml"
 
@@ -36,7 +36,7 @@ num_workers: 8
 log_every: 50
 lr_warmup_steps: 0
 resume_from_checkpoint:
-gradient_accumulation_steps: 3 # TODO
+gradient_accumulation_steps: 4 # TODO
 num_classes:
 
 # low VRAM and speed up training TODO
@@ -46,4 +46,4 @@ enable_xformers_memory_efficient_attention: False
 gradient_checkpointing: False
 
 # Wandb logger
-project: 
+project: vdm

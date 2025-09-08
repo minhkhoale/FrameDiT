@@ -1,9 +1,9 @@
 # dataset
-transform_ffsdataset: "ucf101"
+dataset: "ucf101"
 
 data_path: "/scratch/s224075134/temporal_diffusion/datasets/video/ucf101/preprocessed_256_mp4"
-latent_path: "/scratch/s224075134/temporal_diffusion/datasets/video/ucf101_latent_32_kl_f8_autoencoder/video"
-load_latent: True
+latent_path:
+load_latent: False
 vae: "configs/vae/autoencoder_kl.yaml"
 
 # save and load

@@ -1,9 +1,8 @@
 # dataset
 dataset: "ucf101"
 
-data_path: "/scratch/s224075134/temporal_diffusion/datasets/video/ucf101/preprocessed_256_mp4"
-latent_path: "/scratch/s224075134/temporal_diffusion/datasets/video/ucf101_latent_32_kl_f8_autoencoder/video"
-load_latent: True
+data_path: "/scratch/s224075134/temporal_diffusion/datasets/video/ucf101/video"
+load_latent: False
 vae: "configs/vae/autoencoder_kl.yaml"
 
 # save and load
@@ -35,7 +34,7 @@ num_workers: 8
 log_every: 50
 lr_warmup_steps: 0
 resume_from_checkpoint:
-gradient_accumulation_steps: 3 # TODO
+gradient_accumulation_steps: 4 # TODO
 num_classes: 101
 
 # low VRAM and speed up training
@@ -44,4 +43,4 @@ mixed_precision: False
 enable_xformers_memory_efficient_attention: False
 gradient_checkpointing: False
 
-project:
+project: vdm

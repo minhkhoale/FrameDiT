@@ -44,15 +44,9 @@ def get_dataset(args):
             transform_ucf101 = transforms.Compose([
                 video_transforms.ToTensorVideo(), # TCHW
                 video_transforms.RandomHorizontalFlipVideo(),
+                video_transforms.UCFCenterCropVideo(args.image_size),
                 transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
             ])
-
-        # transform_ucf101 = transforms.Compose([
-        #     video_transforms.ToTensorVideo(), # TCHW
-        #     video_transforms.RandomHorizontalFlipVideo(),
-        #     video_transforms.UCFCenterCropVideo(args.image_size),
-        #     transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
-        # ])
         return UCF101(args, transform=transform_ucf101, temporal_sample=temporal_sample)
     elif args.dataset == 'ucf101_img':
         transform_ucf101 = transforms.Compose([
@@ -81,8 +75,13 @@ def get_dataset(args):
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
         ])
         return TaichiImages(args, transform=transform_taichi, temporal_sample=temporal_sample)
-    elif args.dataset == 'sky':  
-        transform_sky = transforms.Compose([
+    elif args.dataset == 'sky':
+        if args.load_latent:
+            transform_sky = transforms.Compose([
+                video_transforms.RandomHorizontalFlipVideo(),
+            ])
+        else:
+            transform_sky = transforms.Compose([
                     video_transforms.ToTensorVideo(),
                     video_transforms.CenterCropResizeVideo(args.image_size),
                     # video_transforms.RandomHorizontalFlipVideo(),

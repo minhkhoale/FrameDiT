@@ -2,8 +2,8 @@
 dataset: "ffs"
 
 data_path: "/scratch/s224075134/temporal_diffusion/datasets/video/faceforensics/train/videos/"
-latent_path: "/scratch/s224075134/temporal_diffusion/datasets/video/faceforensics_latent_32_kl_f8_autoencoder/train/videos"
-load_latent: True
+latent_path: 
+load_latent: False
 vae: "configs/vae/autoencoder_kl.yaml"
 
 # save and load
@@ -44,4 +44,4 @@ mixed_precision: False
 enable_xformers_memory_efficient_attention: False
 gradient_checkpointing: False
 
-project: 
+project: vdm
