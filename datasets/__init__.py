@@ -15,12 +15,17 @@ def get_dataset(args):
     temporal_sample = video_transforms.TemporalRandomCrop(args.num_frames * args.frame_interval) # 16 1
 
     if args.dataset == 'ffs':
-        transform_ffs = transforms.Compose([
-            video_transforms.ToTensorVideo(), # TCHW
-            video_transforms.RandomHorizontalFlipVideo(),
-            video_transforms.UCFCenterCropVideo(args.image_size),
-            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
-        ])
+        if args.load_latent:
+            transform_ffs = transforms.Compose([
+                video_transforms.RandomHorizontalFlipVideo(),
+            ])
+        else:
+            transform_ffs = transforms.Compose([
+                video_transforms.ToTensorVideo(), # TCHW
+                video_transforms.RandomHorizontalFlipVideo(),
+                video_transforms.UCFCenterCropVideo(args.image_size),
+                transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
+            ])
         return FaceForensics(args, transform=transform_ffs, temporal_sample=temporal_sample)
     elif args.dataset == 'ffs_img':
         transform_ffs = transforms.Compose([
@@ -31,12 +36,23 @@ def get_dataset(args):
         ])
         return FaceForensicsImages(args, transform=transform_ffs, temporal_sample=temporal_sample)
     elif args.dataset == 'ucf101':
-        transform_ucf101 = transforms.Compose([
-            video_transforms.ToTensorVideo(), # TCHW
-            video_transforms.RandomHorizontalFlipVideo(),
-            video_transforms.UCFCenterCropVideo(args.image_size),
-            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
-        ])
+        if args.load_latent:
+            transform_ucf101 = transforms.Compose([
+                video_transforms.RandomHorizontalFlipVideo(),
+            ])
+        else:
+            transform_ucf101 = transforms.Compose([
+                video_transforms.ToTensorVideo(), # TCHW
+                video_transforms.RandomHorizontalFlipVideo(),
+                transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
+            ])
+
+        # transform_ucf101 = transforms.Compose([
+        #     video_transforms.ToTensorVideo(), # TCHW
+        #     video_transforms.RandomHorizontalFlipVideo(),
+        #     video_transforms.UCFCenterCropVideo(args.image_size),
+        #     transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
+        # ])
         return UCF101(args, transform=transform_ucf101, temporal_sample=temporal_sample)
     elif args.dataset == 'ucf101_img':
         transform_ucf101 = transforms.Compose([

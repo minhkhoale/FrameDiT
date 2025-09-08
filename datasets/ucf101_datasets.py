@@ -42,10 +42,7 @@ def get_filelist(file_path):
     Filelist = []
     for home, dirs, files in os.walk(file_path):
         for filename in files:
-            # 文件名列表，包含完整路径
             Filelist.append(os.path.join(home, filename))
-            # # 文件名列表，只包含文件名
-            # Filelist.append( filename)
     return Filelist
 
 
@@ -137,36 +134,38 @@ class DecordInit(object):
 
 class UCF101(torch.utils.data.Dataset):
     """Load the UCF101 video files
-    
     Args:
         target_video_len (int): the number of video frames will be load.
         align_transform (callable): Align different videos in a specified size.
         temporal_sample (callable): Sample the target length of a video.
     """
-
-    def __init__(self,
-                 configs,
-                 transform=None,
-                 temporal_sample=None):
+    def __init__(self, configs, transform=None, temporal_sample=None):
         self.configs = configs
         self.data_path = configs.data_path
         self.video_lists = get_filelist(configs.data_path)
+        self.latent_lists = get_filelist(configs.latent_path) if configs.load_latent else None
+
         self.transform = transform
         self.temporal_sample = temporal_sample
         self.target_video_len = self.configs.num_frames
         self.v_decoder = DecordInit()
         self.classes, self.class_to_idx = find_classes(self.data_path)
-        # print(self.class_to_idx)
-        # exit()
 
     def __getitem__(self, index):
-        path = self.video_lists[index]
+        if self.configs.load_latent:
+            path = self.latent_lists[index]
+        else:
+            path = self.video_lists[index]
+
         class_name = path.split('/')[-2]
         class_index = self.class_to_idx[class_name]
 
-        vframes, aframes, info = torchvision.io.read_video(filename=path, pts_unit='sec', output_format='TCHW')
-        total_frames = len(vframes)
-        
+        if self.configs.load_latent:
+            vframes = torch.load(path)
+        else:
+            vframes, aframes, info = torchvision.io.read_video(filename=path, pts_unit='sec', output_format='TCHW')
+
+        total_frames = len(vframes)        
         # Sampling video frames
         start_frame_ind, end_frame_ind = self.temporal_sample(total_frames)
         assert end_frame_ind - start_frame_ind >= self.target_video_len

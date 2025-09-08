@@ -2,7 +2,7 @@ import wandb
 
 log_path = '/scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/results/bair64/005-Latte-B-2-F16S1-bair64/log.txt'
 
-wandb.init(project="vdm", name="005-Latte-B-2-F16S1-bair64")
+wandb.init(project="debug", name="005-Latte-B-2-F16S1-bair64")
 
 "each line in the log file has the template: [2025-09-04 12:21:11] (step=0000500/epoch=0000) Train Loss: 0.1158, Gradient Norm: 0.1939, Train Steps/Sec: 17.58"
 with open(log_path, 'r') as f:

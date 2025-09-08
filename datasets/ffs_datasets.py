@@ -135,16 +135,20 @@ class FaceForensics(torch.utils.data.Dataset):
                  transform=None,
                  temporal_sample=None):
         self.configs = configs
+        self.load_latent = configs.load_latent
         self.data_path = configs.data_path
-        self.video_lists = get_filelist(configs.data_path)
+        self.video_lists = get_filelist(configs.latent_path if self.load_latent else configs.data_path)
         self.transform = transform
         self.temporal_sample = temporal_sample
         self.target_video_len = self.configs.num_frames
         self.v_decoder = DecordInit()
-
+    
     def __getitem__(self, index):
         path = self.video_lists[index]
-        vframes, aframes, info = torchvision.io.read_video(filename=path, pts_unit='sec', output_format='TCHW')
+        if self.load_latent:
+            vframes = torch.load(path, weights_only=False)
+        else:
+            vframes, aframes, info = torchvision.io.read_video(filename=path, pts_unit='sec', output_format='TCHW')
         total_frames = len(vframes)
         
         # Sampling video frames

@@ -321,10 +321,9 @@ class DiffLatte(nn.Module):
         x: (N, F, C, H, W) tensor of video inputs
         output: (N, F, D) tensor of frame difference embeddings
         """
-        batches, frames = x.shape[:2]
-        frames = frames//2 + 1
-        idx = torch.zeros((batches, frames), dtype=torch.long, device=x.device)
-        diff_idx = torch.ones((batches, frames-1), dtype=torch.long, device=x.device)
+        batches = x.shape[0]
+        idx = torch.zeros((batches, self.num_frames), dtype=torch.long, device=x.device)
+        diff_idx = torch.ones((batches, self.num_diff), dtype=torch.long, device=x.device)
         idx = rearrange(combine_frames_and_difference(idx, diff_idx), "b t -> (b t)")
         emb = self.frame_difference_embedder(idx, self.training)
         emb = rearrange(emb, "(b t) c -> b t c", b=batches)

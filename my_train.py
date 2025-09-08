@@ -75,8 +75,8 @@ def main(args):
         if args.debug:
             args.results_dir = os.path.join(args.results_dir, 'debug')
 
-        os.makedirs(args.results_dir, exist_ok=True)  # Make results folder (holds all experiment subfolders)
-        experiment_index = len(glob(f"{args.results_dir}/*"))
+        os.makedirs(f"{args.results_dir}/{args.dataset}{args.image_size}", exist_ok=True)  # Make results folder (holds all experiment subfolders)
+        experiment_index = len(glob(f"{args.results_dir}/{args.dataset}{args.image_size}/*"))
         model_string_name = args.model.replace("/", "-")  # e.g., Latte-XL/2 --> Latte-XL-2 (for naming folders)
         num_frame_string = 'F' + str(args.num_frames) + 'S' + str(args.frame_interval)
 
@@ -223,6 +223,7 @@ def main(args):
             
             if not args.load_latent:
                 x = encode_video(vae, x)  # (B,F,C,H,W)
+
             x = x.mul_(vae.scaler)
 
             if args.extras == 78: # text-to-video
@@ -237,8 +238,8 @@ def main(args):
             loss = loss_dict["loss"].mean() / args.gradient_accumulation_steps
             loss.backward()
             # for logging
-            mse = loss_dict["mse"].mean().item()/ args.gradient_accumulation_steps if "mse" in loss_dict else 0.0
-            vb = loss_dict["vb"].mean().item()/ args.gradient_accumulation_steps if "vb" in loss_dict else 0.0
+            mse = loss_dict["mse"].mean().item() / args.gradient_accumulation_steps if "mse" in loss_dict else 0.0
+            vb = loss_dict["vb"].mean().item() / args.gradient_accumulation_steps if "vb" in loss_dict else 0.0
 
             if train_steps < args.start_clip_iter: # if train_steps >= start_clip_iter, will clip gradient
                 gradient_norm = clip_grad_norm_(model.module.parameters(), args.clip_max_norm, clip_grad=False)

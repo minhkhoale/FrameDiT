@@ -31,6 +31,9 @@ def modulate(x, shift, scale):
 def matrix_mul(x, u, w):
     return torch.einsum('nm,...nd,dk->...mk', u, x, w)
 
+def matrix_mul_softmax(x, u, w):
+    return torch.einsum('nm,...nd,dk->...mk', torch.nn.functional.softmax(u, dim=0), x, w)
+
 def matrix_mul_one_side(x, w):
     return torch.einsum('...nd,dk->...nk', x, w)
 
@@ -95,17 +98,20 @@ class MatrixLinear(nn.Module):
         self.in_features = in_features
         self.out_features = out_features
 
-        # self.u = nn.Parameter(torch.empty((in_features[0], out_features[0]), **factory_kwargs))
+        # self.u = nn.Parameter(torch.eye(in_features[0], device='cuda:0'))
+        # self.u = torch.eye(in_features[0], device='cuda:0')
+        self.u = nn.Parameter(torch.empty((in_features[0], out_features[0]), **factory_kwargs))
         self.w = nn.Parameter(torch.empty((in_features[1], out_features[1]), **factory_kwargs))
 
+        # self.u_norm = nn.LayerNorm(in_features[0], elementwise_affine=False, eps=1e-6)
         if bias:
-            self.bias = nn.Parameter(torch.empty((1, out_features[1]), **factory_kwargs))
+            self.bias = nn.Parameter(torch.empty(out_features, **factory_kwargs))
         else:
             self.register_parameter("bias", None)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
-        # x = matrix_mul(input, self.u, self.w)
-        x = matrix_mul_one_side(input, self.w)
+        x = matrix_mul(input, self.u, self.w)
+        # x = matrix_mul_one_side(input, self.w)
         
         if self.bias is not None:
             x += self.bias
@@ -460,7 +466,8 @@ class MatLatte(nn.Module):
                 if module.bias is not None:
                     nn.init.constant_(module.bias, 0)
             elif isinstance(module, MatrixLinear):
-                # torch.nn.init.xavier_uniform_(module.u)
+                if isinstance(module.u, nn.Parameter):
+                    torch.nn.init.xavier_uniform_(module.u)
                 torch.nn.init.xavier_uniform_(module.w)
                 if module.bias is not None:
                     nn.init.constant_(module.bias, 0)

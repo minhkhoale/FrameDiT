@@ -28,8 +28,10 @@ import argparse
 import imageio
 from omegaconf import OmegaConf
 from models import get_models
+from models.diff_utils import uncombine_frames_and_difference
 from einops import rearrange
 from vae import get_vae, decode_video
+os.environ['TORCH_DISTRIBUTED_DEBUG'] = 'DETAIL'
 
 
 def create_npz_from_sample_folder(sample_dir, num=50_000):
@@ -126,12 +128,16 @@ def main(args):
     pbar = range(iterations)
     pbar = tqdm(pbar) if rank == 0 else pbar
     total = 0
+    args.tweedie_difference_threshold = int(args.tweedie_difference_threshold*args.num_sampling_steps)
+    print("Num sampling steps:", args.num_sampling_steps)
+    print("Sampling method:", args.sample_method)
+    print('Tweedie difference threshold:', args.tweedie_difference_threshold)
     for _ in pbar:
         # Sample inputs:
         if args.use_fp16:
-            z = torch.randn(n, args.num_frames, args.in_channels, latent_size, latent_size, dtype=torch.float16, device=device)
+            z = torch.randn(n, args.num_frames*2-1, args.in_channels, latent_size, latent_size, dtype=torch.float16, device=device)
         else:
-            z = torch.randn(n, args.num_frames, args.in_channels, latent_size, latent_size, device=device)
+            z = torch.randn(n, args.num_frames*2-1, args.in_channels, latent_size, latent_size, device=device)
         
         # Setup classifier-free guidance:
         if using_cfg:
@@ -147,12 +153,12 @@ def main(args):
 
         # Sample images:
         if args.sample_method == 'ddim':
-            samples = diffusion.ddim_sample_loop(
-                sample_fn, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device=device
+            samples = diffusion.ddim_sample_loop_difference(
+                sample_fn, z.shape, args.tweedie_difference_threshold, z, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device=device
             )
         elif args.sample_method == 'ddpm':
-            samples = diffusion.p_sample_loop(
-                sample_fn, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device=device
+            samples = diffusion.p_sample_loop_difference(
+                sample_fn, z.shape, args.tweedie_difference_threshold, z, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device=device
             )
 
         if using_cfg:
@@ -161,6 +167,7 @@ def main(args):
         if args.use_fp16:
             samples = samples.to(dtype=torch.float16)
 
+        samples, _ = uncombine_frames_and_difference(samples)
         b, f, c, h, w = samples.shape
         samples = decode_video(vae, samples / vae.scaler)
 
@@ -173,6 +180,7 @@ def main(args):
             imageio.mimwrite(sample_save_path, sample, fps=8, quality=9)
         total += global_batch_size
 
+    print('sample_folder_dir', sample_folder_dir)
     # Make sure all processes have finished saving their samples before attempting to convert to .npz
     dist.barrier()
     # if rank == 0:
@@ -188,9 +196,13 @@ if __name__ == "__main__":
     parser.add_argument("--ckpt", type=str, default="")
     parser.add_argument("--save_video_path", type=str, default="./sample_videos/")
     parser.add_argument("--save_ceph", default=False, action='store_true')
+    parser.add_argument("--tweedie-threshold", type=float, default=None)
+
     args = parser.parse_args()
     omega_conf = OmegaConf.load(args.config)
     omega_conf.ckpt = args.ckpt
     omega_conf.save_video_path = args.save_video_path
     omega_conf.save_ceph = args.save_ceph
+    if args.tweedie_threshold is not None:
+        omega_conf.tweedie_difference_threshold = args.tweedie_threshold
     main(omega_conf)

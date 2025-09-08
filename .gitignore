@@ -5,7 +5,8 @@ results_img
 sample_videos
 wandb
 test
-
+temp
+slurm_log
 
 __pycache__/
 *.py[cod]

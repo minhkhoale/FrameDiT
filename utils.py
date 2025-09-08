@@ -269,15 +269,19 @@ def setup_distributed(backend="nccl", port=None):
         rank = int(os.environ["SLURM_PROCID"])
         world_size = int(os.environ["SLURM_NTASKS"])
         node_list = os.environ["SLURM_NODELIST"]
-        addr = subprocess.getoutput(f"scontrol show hostname {node_list} | head -n1")
+        master_addr = subprocess.getoutput(f"scontrol show hostname {node_list} | head -n1")
         # specify master port
         if port is not None:
-            os.environ["MASTER_PORT"] = str(port)
-        elif "MASTER_PORT" not in os.environ:
-            # os.environ["MASTER_PORT"] = "29566"
-            os.environ["MASTER_PORT"] = str(29567 + num_gpus)
+            master_port = int(port)
+        elif "MASTER_PORT" in os.environ:
+            master_port = int(os.environ["MASTER_PORT"])
+        else:
+            job_id = int(os.environ["SLURM_JOB_ID"].split(".")[0])
+            master_port = 10000 + (job_id % 50000)
+
+        os.environ["MASTER_PORT"] = str(master_port)
         if "MASTER_ADDR" not in os.environ:
-            os.environ["MASTER_ADDR"] = addr
+            os.environ["MASTER_ADDR"] = master_addr
         os.environ["WORLD_SIZE"] = str(world_size)
         os.environ["LOCAL_RANK"] = str(rank % num_gpus)
         os.environ["RANK"] = str(rank)
@@ -305,6 +309,7 @@ def save_batch_videos(videos: torch.Tensor, paths: List[str], **kwargs):
     """
     videos = ((videos * 0.5 + 0.5) * 255).add_(0.5).clamp_(0, 255).to(dtype=torch.uint8).cpu().permute(0, 1, 3, 4, 2).contiguous()
     for i, path in enumerate(paths):
+        print(f'saving {path}')
         imageio.mimwrite(path, videos[i], **kwargs)
 
 

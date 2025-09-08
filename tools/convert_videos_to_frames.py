@@ -12,7 +12,7 @@ from collections import Counter
 
 from PIL import Image
 import torchvision.transforms.functional as TVF
-from moviepy.editor import VideoFileClip
+from moviepy import VideoFileClip
 from tqdm import tqdm
 
 
@@ -92,7 +92,7 @@ if __name__ == "__main__":
     parser.add_argument('-s', '--source_dir', type=str, help='Path to the source dataset')
     parser.add_argument('-t', '--target_dir', type=str, help='Where to save the new dataset')
     parser.add_argument('--video_ext', type=str, default='avi', help='Video extension')
-    parser.add_argument('--target_size', type=int, default=128, help='What size should we resize to?')
+    parser.add_argument('--target_size', type=int, default=256, help='What size should we resize to?')
     parser.add_argument('--force_fps', type=int, help='What fps should we run videos with?')
     parser.add_argument('--num_workers', type=int, default=8, help='Number of processes to launch')
     parser.add_argument('--compute_fps_only', action='store_true', help='Should we just compute fps?')

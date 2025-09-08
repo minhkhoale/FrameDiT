@@ -14,13 +14,14 @@ try:
     from diffusion import create_diffusion
     from utils import find_model, save_batch_videos
     from vae import get_vae, decode_video
+    from models.diff_utils import uncombine_frames_and_difference
 except:
     sys.path.append(os.path.split(sys.path[0])[0])
-
     import utils
     from diffusion import create_diffusion
     from utils import find_model, save_batch_videos
     from vae import get_vae, decode_video
+    from models.diff_utils import uncombine_frames_and_difference
 
 import torch
 import argparse
@@ -79,20 +80,18 @@ def main(args):
     # Labels to condition the model with (feel free to change):
 
     local_batch_size = args.local_batch_size
-    laten_shape = (local_batch_size, args.num_frames, args.in_channels, latent_size, latent_size) # b f c h w
+    latent_shape = (local_batch_size, args.num_frames*2-1, args.in_channels, latent_size, latent_size) # b f c h w
     total_samples = args.total_samples
     num_batches = total_samples // local_batch_size
 
     for step in range(num_batches):
-        print(f'sampling batch {step+1}/{num_batches}...')
         # Create sampling noise:
         if args.use_fp16:
-            z = torch.randn(laten_shape, dtype=torch.float16, device=device) # b c f h w
+            z = torch.randn(latent_shape, dtype=torch.float16, device=device) # b c f h w
         else:
-            z = torch.randn(laten_shape, device=device)
+            z = torch.randn(latent_shape, device=device)
 
         # Setup classifier-free guidance:
-        # z = torch.cat([z, z], 0)
         if using_cfg:
             z = torch.cat([z, z], 0)
             y = torch.randint(0, args.num_classes, (1,), device=device)
@@ -111,6 +110,8 @@ def main(args):
             sample_loop = diffusion.p_sample_loop
 
         samples = sample_loop(sample_fn, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device=device)
+        # unmerge
+        samples, _ = uncombine_frames_and_difference(samples)
         
         if args.use_fp16:
             samples = samples.to(dtype=torch.float16)
