@@ -113,7 +113,7 @@ def calc_metrics_for_dataset(ctx, metrics, real_data_path, fake_data_path, mirro
 
     # Initialize dataset options for fake data.
     args.gen_dataset_kwargs = dnnlib.EasyDict(
-        class_name='utils.dataset.VideoFramesFolderDataset',
+        class_name='utils.dataset.VideoDataset',
         path=fake_data_path,
         cfg=dummy_dataset_cfg,
         xflip=False,
