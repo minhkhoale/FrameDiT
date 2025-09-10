@@ -110,6 +110,14 @@ def main(args):
     if rank == 0:
         os.makedirs(sample_folder_dir, exist_ok=True)
         print(f"Saving .mp4 samples at {sample_folder_dir}")
+    
+    # check existing videos and skip them
+    n_existing_video = len([name for name in os.listdir(sample_folder_dir) if os.path.isfile(os.path.join(sample_folder_dir, name)) and name.endswith('.mp4')])
+    if n_existing_video > 0:
+        print(f"Found {n_existing_video} existing videos in {sample_folder_dir}, skipping them.")
+    
+    args.num_fvd_samples -= n_existing_video
+    
     dist.barrier()
 
     # Figure out how many samples we need to generate on each GPU and how many iterations we need to run:
@@ -117,6 +125,7 @@ def main(args):
     global_batch_size = n * dist.get_world_size()
     # To make things evenly-divisible, we'll sample a bit more than we need and then discard the extra samples:
     total_samples = int(math.ceil(args.num_fvd_samples / global_batch_size) * global_batch_size)
+
     if rank == 0:
         print(f"Total number of images that will be sampled: {total_samples}")
     assert total_samples % dist.get_world_size() == 0, "total_samples must be divisible by world_size"
@@ -125,7 +134,7 @@ def main(args):
     iterations = int(samples_needed_this_gpu // n)
     pbar = range(iterations)
     pbar = tqdm(pbar) if rank == 0 else pbar
-    total = 0
+    total = n_existing_video
     for _ in pbar:
         # Sample inputs:
         if args.use_fp16:

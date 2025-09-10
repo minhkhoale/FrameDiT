@@ -1,6 +1,7 @@
 from .sky_datasets import Sky
 from torchvision import transforms
 from .taichi_datasets import Taichi
+from .taichi_latent_datasets import TaichiLatent
 from .bair_datasets import BAIR
 from datasets import video_transforms
 from .ucf101_datasets import UCF101
@@ -16,9 +17,7 @@ def get_dataset(args):
 
     if args.dataset == 'ffs':
         if args.load_latent:
-            transform_ffs = transforms.Compose([
-                video_transforms.RandomHorizontalFlipVideo(),
-            ])
+            transform_ffs = transforms.Compose([])
         else:
             transform_ffs = transforms.Compose([
                 video_transforms.ToTensorVideo(), # TCHW
@@ -37,9 +36,7 @@ def get_dataset(args):
         return FaceForensicsImages(args, transform=transform_ffs, temporal_sample=temporal_sample)
     elif args.dataset == 'ucf101':
         if args.load_latent:
-            transform_ucf101 = transforms.Compose([
-                video_transforms.RandomHorizontalFlipVideo(),
-            ])
+            transform_ucf101 = transforms.Compose([])
         else:
             transform_ucf101 = transforms.Compose([
                 video_transforms.ToTensorVideo(), # TCHW
@@ -58,16 +55,15 @@ def get_dataset(args):
         return UCF101Images(args, transform=transform_ucf101, temporal_sample=temporal_sample)
     elif args.dataset == 'taichi':
         if args.load_latent:
-            transform_taichi = transforms.Compose([
-                video_transforms.RandomHorizontalFlipVideo(),
-            ])
+            transform_taichi = transforms.Compose([])
+            return TaichiLatent(args, transform=transform_taichi, temporal_sample=temporal_sample)
         else:
             transform_taichi = transforms.Compose([
                 video_transforms.ToTensorVideo(), # TCHW
                 video_transforms.RandomHorizontalFlipVideo(),
                 transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
             ])
-        return Taichi(args, transform=transform_taichi, temporal_sample=temporal_sample)
+            return Taichi(args, transform=transform_taichi, temporal_sample=temporal_sample)
     elif args.dataset == 'taichi_img':
         transform_taichi = transforms.Compose([
             video_transforms.ToTensorVideo(), # TCHW
@@ -77,9 +73,7 @@ def get_dataset(args):
         return TaichiImages(args, transform=transform_taichi, temporal_sample=temporal_sample)
     elif args.dataset == 'sky':
         if args.load_latent:
-            transform_sky = transforms.Compose([
-                video_transforms.RandomHorizontalFlipVideo(),
-            ])
+            transform_sky = transforms.Compose([])
         else:
             transform_sky = transforms.Compose([
                     video_transforms.ToTensorVideo(),
@@ -98,9 +92,7 @@ def get_dataset(args):
         return SkyImages(args, transform=transform_sky, temporal_sample=temporal_sample)
     elif args.dataset == 'bair':
         if args.load_latent:
-            transform_bair = transforms.Compose([
-                video_transforms.RandomHorizontalFlipVideo(),
-            ])
+            transform_bair = transforms.Compose([])
         else:
             transform_bair = transforms.Compose([
                 video_transforms.ToTensorVideo(), # TCHW
