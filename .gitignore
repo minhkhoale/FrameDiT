@@ -5,8 +5,10 @@ results_img
 sample_videos
 wandb
 test
+generation
 temp
 slurm_log
+huggingface
 
 __pycache__/
 *.py[cod]
