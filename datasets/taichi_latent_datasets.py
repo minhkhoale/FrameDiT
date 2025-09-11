@@ -78,7 +78,7 @@ if __name__ == '__main__':
     parser.add_argument("--num_frames", type=int, default=16)
     parser.add_argument("--frame_interval", type=int, default=6)
     parser.add_argument("--load_fron_ceph", type=bool, default=True)
-    parser.add_argument("--latent-path", type=str, default="/scratch/s224075134/temporal_diffusion/datasets/video/taichi_latent_32_kl_f8_autoencoder/train")
+    parser.add_argument("--latent-path", type=str, default="/scratch/s224075134/temporal_diffusion/datasets/video/taichi_latent_16_kl_f8_autoencoder/train")
     config = parser.parse_args()
 
 
@@ -96,13 +96,15 @@ if __name__ == '__main__':
     taichi_dataloader = data.DataLoader(dataset=taichi_dataset, batch_size=1, shuffle=False, num_workers=0)
 
     for i, video_data in enumerate(taichi_dataloader):
+        if i < 20:
+            continue
         latent = video_data['video']
         print(latent.shape)
         print(latent.dtype)
         latent = latent.flatten(0,1)
         video_data = vae.decode(latent).sample
         print(video_data.shape)
-        video_data = video_data.reshape(1, target_video_len, 3, 256, 256)
+        video_data = video_data.reshape(1, target_video_len, 3, 128, 128)
         # for i in range(target_video_len):
         #     save_image(video_data[0][i], os.path.join('./test_data', '%04d.png' % i), normalize=True, value_range=(-1, 1))
 

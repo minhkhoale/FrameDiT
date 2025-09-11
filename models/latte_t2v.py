@@ -8,7 +8,7 @@ from einops import rearrange, repeat
 from typing import Any, Dict, Optional, Tuple
 from diffusers.models import Transformer2DModel
 from diffusers.utils import USE_PEFT_BACKEND, BaseOutput, deprecate
-from diffusers.models.embeddings import get_1d_sincos_pos_embed_from_grid, ImagePositionalEmbeddings, CaptionProjection, PatchEmbed, CombinedTimestepSizeEmbeddings
+from diffusers.models.embeddings import get_1d_sincos_pos_embed_from_grid, ImagePositionalEmbeddings, PixArtAlphaTextProjection, PatchEmbed, CombinedTimestepSizeEmbeddings
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.models.modeling_utils import ModelMixin
 from diffusers.models.attention import BasicTransformerBlock
@@ -661,7 +661,7 @@ class LatteT2V(ModelMixin, ConfigMixin):
 
         self.caption_projection = None
         if caption_channels is not None:
-            self.caption_projection = CaptionProjection(in_features=caption_channels, hidden_size=inner_dim)
+            self.caption_projection = PixArtAlphaTextProjection(in_features=caption_channels, hidden_size=inner_dim)
 
         self.gradient_checkpointing = False
 

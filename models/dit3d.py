@@ -11,7 +11,7 @@ import math
 import torch
 import torch.nn as nn
 import numpy as np
-from typing import Tuple, Optional
+
 from einops import rearrange, repeat
 from timm.models.vision_transformer import Mlp, PatchEmbed
 
@@ -27,9 +27,6 @@ except:
 
 def modulate(x, shift, scale):
     return x * (1 + scale) + shift
-
-def matrix_mul(x, u, w):
-    return torch.einsum('nm,...nd,dk->...mk', u, x, w)
 
 #################################################################################
 #               Attention Layers from TIMM                                      #
@@ -77,155 +74,6 @@ class Attention(nn.Module):
 
         x = self.proj(x)
         x = self.proj_drop(x)
-        return x
-
-
-class MatrixLinear(nn.Module):
-    def __init__(
-        self,
-        in_features: Tuple[int, int],
-        out_features: Tuple[int, int],
-        bias=True,
-        device=None,
-        dtype=None,
-    ):
-        factory_kwargs = {"device": device, "dtype": dtype}
-        super().__init__()
-        self.in_features = in_features
-        self.out_features = out_features
-
-        self.u = nn.Parameter(torch.empty((in_features[0], out_features[0]), **factory_kwargs))
-        self.w = nn.Parameter(torch.empty((in_features[1], out_features[1]), **factory_kwargs))
-
-        if bias:
-            self.bias = nn.Parameter(torch.empty(out_features, **factory_kwargs))
-        else:
-            self.register_parameter("bias", None)
-
-        self.initialize_weights()
-
-    def initialize_weights(self):
-        nn.init.xavier_uniform_(self.u)
-        nn.init.xavier_uniform_(self.w)
-        if self.bias is not None:
-            fan_in, _ = nn.init._calculate_fan_in_and_fan_out(self.u)
-            bound = 1 / math.sqrt(fan_in)
-            nn.init.uniform_(self.bias, -bound, bound)
-
-    def forward(self, input: torch.Tensor) -> torch.Tensor:
-        x = matrix_mul(input, self.u, self.w)
-        if self.bias is not None:
-            x += self.bias
-        return x
-    
-    def __repr__(self):
-        return f"MatrixLinear(in_features={self.in_features}, out_features={self.out_features}), bias={self.bias is not None})"
-
-
-class MatrixAttention(nn.Module):
-    """
-    Matrix attention block.
-    This is a simplified version of the attention block that does not use RoPE.
-    It is used in the DiT model for the final layer.
-    """
-    def __init__(
-        self, 
-        col_dim: int,
-        row_dim: int,
-        qk_col_dim: Optional[int] = None,
-        v_col_dim: Optional[int] = None,
-        num_col_heads: int = 4,
-        num_row_heads: int = 4,
-        attn_drop: float = 0.0,
-        proj_drop: float = 0.0,
-        use_bias=False,
-        attention_mode='math'
-    ):
-        super().__init__()
-        assert qk_col_dim % num_col_heads == 0, "qk_col_dim must be divisible by num_col_heads"
-        assert v_col_dim % num_col_heads == 0, "v_col_dim must be divisible by num_col_heads"
-        assert row_dim % num_row_heads == 0, "row_dim must be divisible by num_row_heads"
-
-
-        self.col_dim = col_dim
-        self.row_dim = row_dim
-
-        self.qk_col_dim = qk_col_dim
-        self.v_col_dim = v_col_dim
-
-        self.num_col_heads = num_col_heads
-        self.num_row_heads = num_row_heads
-        self.num_heads = num_col_heads * num_row_heads
-        self.use_bias = use_bias
-
-        self.head_row_dim = row_dim // num_row_heads
-        self.qk_head_col_dim = self.qk_col_dim // num_col_heads
-        self.v_head_col_dim = self.v_col_dim // num_col_heads
-
-        self.linear_q = MatrixLinear((self.col_dim, self.row_dim), (self.qk_col_dim, self.row_dim), bias=self.use_bias)
-        self.linear_k = MatrixLinear((self.col_dim, self.row_dim), (self.qk_col_dim, self.row_dim), bias=self.use_bias)
-        self.linear_v = MatrixLinear((self.col_dim, self.row_dim), (self.v_col_dim, self.row_dim), bias=self.use_bias)
-
-        self.proj_v = MatrixLinear((self.v_col_dim, self.row_dim), (self.col_dim, self.row_dim), bias=self.use_bias)
-
-        self.scale = (self.qk_head_col_dim*self.head_row_dim)**-0.5
-
-        self.attn_drop = nn.Dropout(attn_drop)
-        self.proj_drop = nn.Dropout(proj_drop)
-
-        self.attention_mode = attention_mode
-
-    def initialize_weights(self):
-        self.linear_q.initialize_weights()
-        self.linear_k.initialize_weights()
-        self.linear_v.initialize_weights()
-        self.proj_v.initialize_weights()
-
-    def forward(
-        self, 
-        x: torch.Tensor, 
-        timestep=None,
-        height: int = None,
-        width: int = None
-    ) -> torch.Tensor:
-        if hasattr(self, "store_attn_map"):
-            raise NotImplementedError("MatrixAttention does not support storing attention maps.")
-
-        # B: batch_size
-        # T: n_frames
-        # N: n_tokens per frame
-        # D: dim of a token
-        B, T, N, D = x.shape
-
-        q = self.linear_q(x)  # B, T, qk, row_dim
-        k = self.linear_k(x)  # B, T, N, row_dim
-        v = self.linear_v(x)  # B, T, N, row_dim
-
-        # Rearrange
-        q = rearrange(q, 'B T (C N) (R D) -> B (C R) T (N D)', B=B, T=T, C=self.num_col_heads, R=self.num_row_heads, N=self.qk_head_col_dim, D=self.head_row_dim)
-        k = rearrange(k, 'B T (C N) (R D) -> B (C R) T (N D)', B=B, T=T, C=self.num_col_heads, R=self.num_row_heads, N=self.qk_head_col_dim, D=self.head_row_dim)
-        v = rearrange(v, 'B T (C N) (R D) -> B (C R) T (N D)', B=B, T=T, C=self.num_col_heads, R=self.num_row_heads, N=self.v_head_col_dim, D=self.head_row_dim)
-
-        if self.attention_mode == 'xformers':
-           raise NotImplementedError("MatrixAttention does not support xformers attention mode.")
-        elif self.attention_mode == 'flash':
-            # cause loss nan while using with amp
-            # Optionally use the context manager to ensure one of the fused kerenels is run
-            with torch.backends.cuda.sdp_kernel(enable_math=False):
-                x = torch.nn.functional.scaled_dot_product_attention(q, k, v).reshape(B, T, N*D) # (B, col_num_head * row_num_head, num_tokens, N*D)
-        elif self.attention_mode == 'math':
-            attn = (q @ k.transpose(-2, -1)) * self.scale  # (B, col_num_head * row_num_head, T, T)
-            attn = attn.softmax(dim=-1)
-            attn = self.attn_drop(attn)
-            x = (attn @ v).transpose(1, 2).reshape(B, T, N*D)  # (B, T, col_num_head * row_num_head, N*D)
-        else:
-            raise NotImplementedError(f"Unknown attention mode: {self.attention_mode}")
-
-        x = rearrange(x, 'B C R T N D -> B T (C N) (R D)')  # (B, L, num_col_heads * head_col_dim, num_row_heads * head_row_dim)
-
-        x = self.proj_v(x)
-        x = self.proj_drop(x)
-
         return x
 
 
@@ -306,12 +154,12 @@ class LabelEmbedder(nn.Module):
 
 
 #################################################################################
-#                                 Core MatLatte Model                                #
+#                                 Core DiT3D Model                                #
 #################################################################################
 
 class TransformerBlock(nn.Module):
     """
-    A MatLatte tansformer block with adaptive layer norm zero (adaLN-Zero) conditioning.
+    A DiT3D tansformer block with adaptive layer norm zero (adaLN-Zero) conditioning.
     """
     def __init__(self, hidden_size, num_heads, mlp_ratio=4.0, **block_kwargs):
         super().__init__()
@@ -331,56 +179,11 @@ class TransformerBlock(nn.Module):
         x = x + gate_msa * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
         x = x + gate_mlp * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
         return x
-    
-
-class MatrixTransformerBlock(nn.Module):
-    def __init__(
-        self,
-        hidden_size: int, 
-        col_dim: int, 
-        qk_col_dim: int, 
-        v_col_dim: int,
-        num_col_heads: int, 
-        num_row_heads: int,
-        mlp_ratio=4.0, 
-        **block_kwargs
-    ):
-        super().__init__()
-        self.col_dim = col_dim
-        self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.attn = MatrixAttention(
-            col_dim=col_dim,
-            row_dim=hidden_size,
-            qk_col_dim=qk_col_dim,
-            v_col_dim=v_col_dim,
-            num_col_heads=num_col_heads,
-            num_row_heads=num_row_heads,
-            **block_kwargs
-        )
-        self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        mlp_hidden_dim = int(hidden_size * mlp_ratio)
-        approx_gelu = lambda: nn.GELU(approximate="tanh")
-        self.mlp = Mlp(in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0)
-        self.adaLN_modulation = nn.Sequential(
-            nn.SiLU(),
-            nn.Linear(hidden_size, 6 * hidden_size, bias=True)
-        )
-
-    def forward(self, x, c):
-        """
-        x: (B*N, F, D)
-        c: (B*N, F, D)
-        """
-        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=-1)
-        attn_x = self.attn(rearrange(modulate(self.norm1(x), shift_msa, scale_msa), '(b n) f d -> b f n d', n=self.col_dim))
-        x = x + gate_msa * rearrange(attn_x, 'b f n d -> (b n) f d')
-        x = x + gate_mlp * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
-        return x
 
 
 class FinalLayer(nn.Module):
     """
-    The final layer of MatLatte.
+    The final layer of DiT3D.
     """
     def __init__(self, hidden_size, patch_size, out_channels):
         super().__init__()
@@ -398,7 +201,7 @@ class FinalLayer(nn.Module):
         return x
 
 
-class MatLatte(nn.Module):
+class DiT3D(nn.Module):
     """
     Diffusion model with a Transformer backbone.
     """
@@ -445,9 +248,7 @@ class MatLatte(nn.Module):
         self.hidden_size =  hidden_size
 
         self.blocks = nn.ModuleList([
-            TransformerBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio, attention_mode=attention_mode) if i % 2 == 0 else \
-            MatrixTransformerBlock(hidden_size, col_dim=num_patches, qk_col_dim=hidden_size, v_col_dim=hidden_size, num_col_heads=num_heads, num_row_heads=1, mlp_ratio=mlp_ratio, attention_mode=attention_mode) \
-            for i in range(depth)
+            TransformerBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio, attention_mode=attention_mode) for _ in range(depth)
         ])
 
         self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
@@ -482,7 +283,7 @@ class MatLatte(nn.Module):
         nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
         nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
 
-        # Zero-out adaLN modulation layers in MatLatte blocks:
+        # Zero-out adaLN modulation layers in DiT3D blocks:
         for block in self.blocks:
             nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
             nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
@@ -517,7 +318,7 @@ class MatLatte(nn.Module):
                 text_embedding=None, 
                 use_fp16=False):
         """
-        Forward pass of MatLatte.
+        Forward pass of DiT3D.
         x: (N, F, C, H, W) tensor of video inputs
         t: (N,) tensor of diffusion timesteps
         y: (N,) tensor of class labels
@@ -527,57 +328,39 @@ class MatLatte(nn.Module):
 
         batches, frames, channels, high, weight = x.shape 
         x = rearrange(x, 'b f c h w -> (b f) c h w')
-        x = self.x_embedder(x) + self.pos_embed  
-        t = self.t_embedder(t, use_fp16=use_fp16)                  
-        timestep_spatial = repeat(t, 'b d -> (b f) n d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1]) 
-        timestep_temp = repeat(t, 'b d -> (b n) f d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1])
+        x = self.x_embedder(x) + self.pos_embed
+        x = rearrange(x, '(b f) n d -> (b n) f d', b=batches, f=frames)
+        x = x + self.temp_embed
+        x = rearrange(x, '(b n) f d -> b (f n) d', b=batches, f=frames)
 
+        timestep = self.t_embedder(t, use_fp16=use_fp16)           
+        timestep = repeat(timestep, 'b d -> b (f n) d', f=self.temp_embed.shape[1], n=self.pos_embed.shape[1])       
         if self.extras == 2:
             y = self.y_embedder(y, self.training)
-            y_spatial = repeat(y, 'b d -> (b f) n d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1])
-            y_temp = repeat(y, 'b d -> (b n) f d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1])
+            y = repeat(y, 'b d -> b (f n) d', f=self.temp_embed.shape[1], n=self.pos_embed.shape[1])
         elif self.extras == 78:
             text_embedding = self.text_embedding_projection(text_embedding.reshape(batches, -1))
-            text_embedding_spatial = repeat(text_embedding, 'b d -> (b f) n d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1])
-            text_embedding_temp = repeat(text_embedding, 'b d -> (b n) f d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1])
-
-        for i in range(0, len(self.blocks), 2):
-            spatial_block, temp_block = self.blocks[i:i+2]
-            if self.extras == 2:
-                c = timestep_spatial + y_spatial
-            elif self.extras == 78:
-                c = timestep_spatial + text_embedding_spatial
-            else:
-                c = timestep_spatial
-            x  = spatial_block(x, c)
-
-            x = rearrange(x, '(b f) n d -> (b n) f d', b=batches)
-            # Add Time Embedding
-            if i == 0:
-                x = x + self.temp_embed
-
-            if self.extras == 2:
-                c = timestep_temp + y_temp
-            elif self.extras == 78:
-                c = timestep_temp + text_embedding_temp
-            else:
-                c = timestep_temp
-
-            x = temp_block(x, c)
-            x = rearrange(x, '(b n) f d -> (b f) n d', b=batches)
-
+            text_embedding = repeat(text_embedding, 'b d -> b (f n) d', f=self.temp_embed.shape[1], n=self.pos_embed.shape[1])
+        
         if self.extras == 2:
-            c = timestep_spatial + y_spatial
+            c = timestep + y
+        elif self.extras == 78:
+            c = timestep + text_embedding
         else:
-            c = timestep_spatial
-        x = self.final_layer(x, c)               
+            c = timestep
+
+        for i, block in enumerate(self.blocks):
+            x = block(x, c)
+
+        x = self.final_layer(x, c)
+        x = rearrange(x, 'b (f n) d -> (b f) n d', f=frames)
         x = self.unpatchify(x)                  
         x = rearrange(x, '(b f) c h w -> b f c h w', b=batches)
         return x
 
     def forward_with_cfg(self, x, t, y=None, cfg_scale=7.0, use_fp16=False, text_embedding=None):
         """
-        Forward pass of MatLatte, but also batches the unconditional forward pass for classifier-free guidance.
+        Forward pass of DiT3D, but also batches the unconditional forward pass for classifier-free guidance.
         """
         # https://github.com/openai/glide-text2im/blob/main/notebooks/text2im.ipynb
         half = x[: len(x) // 2]
@@ -657,51 +440,61 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
 
 
 #################################################################################
-#                                   MatLatte Configs                                  #
+#                                   DiT3D Configs                                  #
 #################################################################################
 
-def MatLatte_XL_2(**kwargs):
-    return MatLatte(depth=28, hidden_size=1152, patch_size=2, num_heads=16, **kwargs)
+def DiT3D_XL_2(**kwargs):
+    return DiT3D(depth=28, hidden_size=1152, patch_size=2, num_heads=16, **kwargs)
 
-def MatLatte_XL_4(**kwargs):
-    return MatLatte(depth=28, hidden_size=1152, patch_size=4, num_heads=16, **kwargs)
+def DiT3D_XL_4(**kwargs):
+    return DiT3D(depth=28, hidden_size=1152, patch_size=4, num_heads=16, **kwargs)
 
-def MatLatte_XL_8(**kwargs):
-    return MatLatte(depth=28, hidden_size=1152, patch_size=8, num_heads=16, **kwargs)
+def DiT3D_XL_8(**kwargs):
+    return DiT3D(depth=28, hidden_size=1152, patch_size=8, num_heads=16, **kwargs)
 
-def MatLatte_L_2(**kwargs):
-    return MatLatte(depth=24, hidden_size=1024, patch_size=2, num_heads=16, **kwargs)
+def DiT3D_L_2(**kwargs):
+    return DiT3D(depth=24, hidden_size=1024, patch_size=2, num_heads=16, **kwargs)
 
-def MatLatte_L_4(**kwargs):
-    return MatLatte(depth=24, hidden_size=1024, patch_size=4, num_heads=16, **kwargs)
+def DiT3D_L_4(**kwargs):
+    return DiT3D(depth=24, hidden_size=1024, patch_size=4, num_heads=16, **kwargs)
 
-def MatLatte_L_8(**kwargs):
-    return MatLatte(depth=24, hidden_size=1024, patch_size=8, num_heads=16, **kwargs)
+def DiT3D_L_8(**kwargs):
+    return DiT3D(depth=24, hidden_size=1024, patch_size=8, num_heads=16, **kwargs)
 
-def MatLatte_B_2(**kwargs):
-    return MatLatte(depth=12, hidden_size=768, patch_size=2, num_heads=12, **kwargs)
+def DiT3D_M_2(**kwargs):
+    return DiT3D(depth=12, hidden_size=1024, patch_size=2, num_heads=16, **kwargs)
 
-def MatLatte_B_4(**kwargs):
-    return MatLatte(depth=12, hidden_size=768, patch_size=4, num_heads=12, **kwargs)
+def DiT3D_M_4(**kwargs):
+    return DiT3D(depth=12, hidden_size=1024, patch_size=4, num_heads=16, **kwargs)
 
-def MatLatte_B_8(**kwargs):
-    return MatLatte(depth=12, hidden_size=768, patch_size=8, num_heads=12, **kwargs)
+def DiT3D_M_8(**kwargs):
+    return DiT3D(depth=12, hidden_size=1024, patch_size=8, num_heads=16, **kwargs)
 
-def MatLatte_S_2(**kwargs):
-    return MatLatte(depth=12, hidden_size=384, patch_size=2, num_heads=6, **kwargs)
+def DiT3D_B_2(**kwargs):
+    return DiT3D(depth=12, hidden_size=768, patch_size=2, num_heads=12, **kwargs)
 
-def MatLatte_S_4(**kwargs):
-    return MatLatte(depth=12, hidden_size=384, patch_size=4, num_heads=6, **kwargs)
+def DiT3D_B_4(**kwargs):
+    return DiT3D(depth=12, hidden_size=768, patch_size=4, num_heads=12, **kwargs)
 
-def MatLatte_S_8(**kwargs):
-    return MatLatte(depth=12, hidden_size=384, patch_size=8, num_heads=6, **kwargs)
+def DiT3D_B_8(**kwargs):
+    return DiT3D(depth=12, hidden_size=768, patch_size=8, num_heads=12, **kwargs)
+
+def DiT3D_S_2(**kwargs):
+    return DiT3D(depth=12, hidden_size=384, patch_size=2, num_heads=6, **kwargs)
+
+def DiT3D_S_4(**kwargs):
+    return DiT3D(depth=12, hidden_size=384, patch_size=4, num_heads=6, **kwargs)
+
+def DiT3D_S_8(**kwargs):
+    return DiT3D(depth=12, hidden_size=384, patch_size=8, num_heads=6, **kwargs)
 
 
-MatLatte_models = {
-    'MatLatte-XL/2': MatLatte_XL_2,  'MatLatte-XL/4': MatLatte_XL_4,  'MatLatte-XL/8': MatLatte_XL_8,
-    'MatLatte-L/2':  MatLatte_L_2,   'MatLatte-L/4':  MatLatte_L_4,   'MatLatte-L/8':  MatLatte_L_8,
-    'MatLatte-B/2':  MatLatte_B_2,   'MatLatte-B/4':  MatLatte_B_4,   'MatLatte-B/8':  MatLatte_B_8,
-    'MatLatte-S/2':  MatLatte_S_2,   'MatLatte-S/4':  MatLatte_S_4,   'MatLatte-S/8':  MatLatte_S_8,
+DiT3D_models = {
+    'DiT3D-XL/2': DiT3D_XL_2,  'DiT3D-XL/4': DiT3D_XL_4,  'DiT3D-XL/8': DiT3D_XL_8,
+    'DiT3D-L/2':  DiT3D_L_2,   'DiT3D-L/4':  DiT3D_L_4,   'DiT3D-L/8':  DiT3D_L_8,
+    'DiT3D-M/2':  DiT3D_M_2,   'DiT3D-M/4':  DiT3D_M_4,   'DiT3D-M/8':  DiT3D_M_8,
+    'DiT3D-B/2':  DiT3D_B_2,   'DiT3D-B/4':  DiT3D_B_4,   'DiT3D-B/8':  DiT3D_B_8,
+    'DiT3D-S/2':  DiT3D_S_2,   'DiT3D-S/4':  DiT3D_S_4,   'DiT3D-S/8':  DiT3D_S_8,
 }
 
 if __name__ == '__main__':
@@ -713,7 +506,7 @@ if __name__ == '__main__':
     img = torch.randn(3, 16, 4, 32, 32).to(device)
     t = torch.tensor([1, 2, 3]).to(device)
     y = torch.tensor([1, 2, 3]).to(device)
-    network = MatLatte_XL_2().to(device)
+    network = DiT3D_XL_2().to(device)
     from thop import profile 
     flops, params = profile(network, inputs=(img, t))
     print('FLOPs = ' + str(flops/1000**3) + 'G')

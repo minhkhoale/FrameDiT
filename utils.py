@@ -14,7 +14,7 @@ from torch import inf
 from PIL import Image
 from typing import Union, Iterable
 from collections import OrderedDict
-from torch.utils.tensorboard import SummaryWriter   
+# from torch.utils.tensorboard import SummaryWriter   
 
 from diffusers.utils import is_bs4_available, is_ftfy_available
 from einops import repeat
@@ -210,23 +210,23 @@ def create_logger(logging_dir):
     return logger
 
 
-def create_tensorboard(tensorboard_dir):
-    """
-    Create a tensorboard that saves losses.
-    """
-    if dist.get_rank() == 0:  # real tensorboard 
-        # tensorboard 
-        writer = SummaryWriter(tensorboard_dir)
+# def create_tensorboard(tensorboard_dir):
+#     """
+#     Create a tensorboard that saves losses.
+#     """
+#     if dist.get_rank() == 0:  # real tensorboard 
+#         # tensorboard 
+#         writer = SummaryWriter(tensorboard_dir)
 
-    return writer
+#     return writer
 
-def write_tensorboard(writer, *args):
-    '''
-    write the loss information to a tensorboard file.
-    Only for pytorch DDP mode.
-    '''
-    if dist.get_rank() == 0:  # real tensorboard
-        writer.add_scalar(args[0], args[1], args[2])
+# def write_tensorboard(writer, *args):
+#     '''
+#     write the loss information to a tensorboard file.
+#     Only for pytorch DDP mode.
+#     '''
+#     if dist.get_rank() == 0:  # real tensorboard
+#         writer.add_scalar(args[0], args[1], args[2])
 
 #################################################################################
 #                      EMA Update/ DDP Training Utils                           #

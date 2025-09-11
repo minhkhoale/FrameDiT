@@ -712,6 +712,15 @@ def MatLatte_L_4(**kwargs):
 def MatLatte_L_8(**kwargs):
     return MatLatte(depth=24, hidden_size=1024, patch_size=8, num_row_heads=16, **kwargs)
 
+def MatLatte_M_2(**kwargs):
+    return MatLatte(depth=12, hidden_size=1024, patch_size=2, num_row_heads=16, **kwargs)
+
+def MatLatte_M_4(**kwargs):
+    return MatLatte(depth=12, hidden_size=1024, patch_size=4, num_row_heads=16, **kwargs)
+
+def MatLatte_M_8(**kwargs):
+    return MatLatte(depth=12, hidden_size=1024, patch_size=8, num_row_heads=16, **kwargs)
+
 def MatLatte_B_2(**kwargs):
     return MatLatte(depth=12, hidden_size=768, patch_size=2, num_row_heads=12, **kwargs)
 
@@ -731,44 +740,46 @@ def MatLatte_S_8(**kwargs):
     return MatLatte(depth=12, hidden_size=384, patch_size=8, num_row_heads=6, **kwargs)
 
 # For image size 256
-def MatLatte_XL_16_256_2(**kwargs):
-    return MatLatte_XL_2(qk_col_dim=16, v_col_dim=256, num_col_heads=256, **kwargs)
-
-def MatLatte_XL_64_256_2(**kwargs):
-    return MatLatte_XL_2(qk_col_dim=64, v_col_dim=256, num_col_heads=256, **kwargs)
-
 def MatLatte_XL_256_256_2(**kwargs):
     return MatLatte_XL_2(qk_col_dim=256, v_col_dim=256, num_col_heads=256, **kwargs)
 
-def MatLatte_XL_256_512_2(**kwargs):
-    return MatLatte_XL_2(qk_col_dim=256, v_col_dim=256, num_col_heads=512, **kwargs)
+# For image size 128, 64 tokens per frame
+def MatLatte_M_16_64_2(**kwargs):
+    return MatLatte_M_2(qk_col_dim=16, v_col_dim=64, num_col_heads=16, **kwargs)
+
+def MatLatte_M_4_256_2(**kwargs):
+    return MatLatte_M_2(qk_col_dim=4, v_col_dim=256, num_col_heads=4, **kwargs)
+
+def MatLatte_M_8_256_2(**kwargs):
+    return MatLatte_M_2(qk_col_dim=8, v_col_dim=256, num_col_heads=8, **kwargs)
+
+def MatLatte_M_16_256_2(**kwargs):
+    return MatLatte_M_2(qk_col_dim=16, v_col_dim=256, num_col_heads=16, **kwargs)
+
+def MatLatte_M_32_256_2(**kwargs):
+    return MatLatte_M_2(qk_col_dim=32, v_col_dim=256, num_col_heads=32, **kwargs)
+
+def MatLatte_M_16_512_2(**kwargs):
+    return MatLatte_M_2(qk_col_dim=16, v_col_dim=512, num_col_heads=16, **kwargs)
+
+def MatLatte_M_64_64_2(**kwargs):
+    return MatLatte_M_2(qk_col_dim=64, v_col_dim=64, num_col_heads=64, **kwargs)
+
+def MatLatte_M_64_256_2(**kwargs):
+    return MatLatte_M_2(qk_col_dim=64, v_col_dim=256, num_col_heads=64, **kwargs)
 
 # For image size 64
-def MatLatte_B_1_16_2(**kwargs):
-    return MatLatte_B_2(qk_col_dim=1, v_col_dim=16, num_col_heads=1, **kwargs)
-
-def MatLatte_B_8_16_2(**kwargs):
-    return MatLatte_B_2(qk_col_dim=8, v_col_dim=16, num_col_heads=8, **kwargs)
-
 def MatLatte_B_16_16_2(**kwargs):
     return MatLatte_B_2(qk_col_dim=16, v_col_dim=16, num_col_heads=16, **kwargs)
-
-def MatLatte_B_16_32_2(**kwargs):
-    return MatLatte_B_2(qk_col_dim=16, v_col_dim=32, num_col_heads=16, **kwargs)
-
-def MatLatte_B_16_64_2(**kwargs):
-    return MatLatte_B_2(qk_col_dim=16, v_col_dim=64, num_col_heads=16, **kwargs)
 #============================================================================================
 
 
-
-
 MatLatte_models = {
-    'MatLatte-B/1-16/2': MatLatte_B_1_16_2, 'MatLatte-B/8-16/2': MatLatte_B_8_16_2, 
-    'MatLatte-B/16-16/2': MatLatte_B_16_16_2, 'MatLatte-B/16-32/2': MatLatte_B_16_32_2, 
-    'MatLatte-B/16-64/2': MatLatte_B_16_64_2,
-    'MatLatte-XL/16-256/2': MatLatte_XL_16_256_2, 'MatLatte-XL/64-256/2': MatLatte_XL_64_256_2, 
-    'MatLatte-XL/256-256/2': MatLatte_XL_256_256_2, 'MatLatte-XL/256-512/2': MatLatte_XL_256_512_2,
+    'MatLatte-B/16-16/2': MatLatte_B_16_16_2,
+    'MatLatte-M/64-64/2': MatLatte_M_64_64_2, 'MatLatte-M/16-64/2': MatLatte_M_16_64_2, 'MatLatte-M/64-256/2': MatLatte_M_64_256_2, 
+    'MatLatte-M/16-256/2': MatLatte_M_16_256_2, 'MatLatte-M/16-512/2': MatLatte_M_16_512_2,
+    'MatLatte-M/4-256/2': MatLatte_M_4_256_2, 'MatLatte-M/8-256/2': MatLatte_M_8_256_2, 'MatLatte-M/32-256/2': MatLatte_M_32_256_2,
+    'MatLatte-XL/256-256/2': MatLatte_XL_256_256_2,
 }
 
 if __name__ == '__main__':

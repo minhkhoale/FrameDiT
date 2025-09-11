@@ -58,11 +58,19 @@ def get_dataset(args):
             transform_taichi = transforms.Compose([])
             return TaichiLatent(args, transform=transform_taichi, temporal_sample=temporal_sample)
         else:
-            transform_taichi = transforms.Compose([
-                video_transforms.ToTensorVideo(), # TCHW
-                video_transforms.RandomHorizontalFlipVideo(),
-                transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
-            ])
+            if args.image_size < 256:
+                transform_taichi = transforms.Compose([
+                    video_transforms.ToTensorVideo(), # TCHW
+                    video_transforms.CenterCropResizeVideo(args.image_size),
+                    video_transforms.RandomHorizontalFlipVideo(),
+                    transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
+                ])
+            else:
+                transform_taichi = transforms.Compose([
+                    video_transforms.ToTensorVideo(), # TCHW
+                    video_transforms.RandomHorizontalFlipVideo(),
+                    transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
+                ])
             return Taichi(args, transform=transform_taichi, temporal_sample=temporal_sample)
     elif args.dataset == 'taichi_img':
         transform_taichi = transforms.Compose([

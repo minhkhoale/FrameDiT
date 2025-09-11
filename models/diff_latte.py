@@ -503,6 +503,15 @@ def DiffLatte_L_4(**kwargs):
 def DiffLatte_L_8(**kwargs):
     return DiffLatte(depth=24, hidden_size=1024, patch_size=8, num_heads=16, **kwargs)
 
+def DiffLatte_M_2(**kwargs):
+    return DiffLatte(depth=12, hidden_size=1024, patch_size=2, num_heads=16, **kwargs)
+
+def DiffLatte_M_4(**kwargs):
+    return DiffLatte(depth=12, hidden_size=1024, patch_size=4, num_heads=16, **kwargs)
+
+def DiffLatte_M_8(**kwargs):
+    return DiffLatte(depth=12, hidden_size=1024, patch_size=8, num_heads=16, **kwargs)
+
 def DiffLatte_B_2(**kwargs):
     return DiffLatte(depth=12, hidden_size=768, patch_size=2, num_heads=12, **kwargs)
 
@@ -525,6 +534,7 @@ def DiffLatte_S_8(**kwargs):
 DiffLatte_models = {
     'DiffLatte-XL/2': DiffLatte_XL_2,  'DiffLatte-XL/4': DiffLatte_XL_4,  'DiffLatte-XL/8': DiffLatte_XL_8,
     'DiffLatte-L/2':  DiffLatte_L_2,   'DiffLatte-L/4':  DiffLatte_L_4,   'DiffLatte-L/8':  DiffLatte_L_8,
+    'DiffLatte-M/2':  DiffLatte_M_2,   'DiffLatte-M/4':  DiffLatte_M_4,   'DiffLatte-M/8':  DiffLatte_M_8,
     'DiffLatte-B/2':  DiffLatte_B_2,   'DiffLatte-B/4':  DiffLatte_B_4,   'DiffLatte-B/8':  DiffLatte_B_8,
     'DiffLatte-S/2':  DiffLatte_S_2,   'DiffLatte-S/4':  DiffLatte_S_4,   'DiffLatte-S/8':  DiffLatte_S_8,
 }

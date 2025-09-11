@@ -35,8 +35,7 @@ from diffusers.optimization import get_scheduler
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 from utils import (clip_grad_norm_, create_logger, update_ema, 
-                   requires_grad, cleanup, create_tensorboard, 
-                   write_tensorboard, setup_distributed,
+                   requires_grad, cleanup, setup_distributed,
                    get_experiment_dir, text_preprocessing)
 import numpy as np
 from transformers import T5EncoderModel, T5Tokenizer
@@ -102,6 +101,7 @@ def main(args):
     sample_size = args.image_size // 8
     args.latent_size = sample_size
     model = get_models(args)
+    print('Model', model)
     
     diffusion = create_diffusion(timestep_respacing="")  # default: 1000 steps, linear noise schedule
 

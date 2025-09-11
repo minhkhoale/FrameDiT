@@ -6,7 +6,7 @@ from .latte import Latte_models
 from .latte_img import LatteIMG_models
 # from .latte_t2v import LatteT2V
 from .mat_latte import MatLatte_models
-from .full_attn import DiT3D_models
+from .dit3d import DiT3D_models
 from .diff_latte import DiffLatte_models
 from .latte_v2 import LatteV2_models
 

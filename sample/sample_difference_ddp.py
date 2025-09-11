@@ -151,15 +151,24 @@ def main(args):
             model_kwargs = dict(y=None, use_fp16=args.use_fp16)
             sample_fn = model.forward
 
-        # Sample images:
-        if args.sample_method == 'ddim':
-            samples = diffusion.ddim_sample_loop_difference(
-                sample_fn, z.shape, args.tweedie_difference_threshold, z, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device=device
-            )
-        elif args.sample_method == 'ddpm':
-            samples = diffusion.p_sample_loop_difference(
-                sample_fn, z.shape, args.tweedie_difference_threshold, z, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device=device
-            )
+        if args.tweedie_difference_threshold <= 0:
+            if args.sample_method == 'ddim':
+                samples = diffusion.ddim_sample_loop(
+                    sample_fn, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device=device
+                )
+            elif args.sample_method == 'ddpm':
+                samples = diffusion.p_sample_loop(
+                    sample_fn, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device=device
+                )
+        else:
+            if args.sample_method == 'ddim':
+                samples = diffusion.ddim_sample_loop_difference(
+                    sample_fn, z.shape, args.tweedie_difference_threshold, z, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device=device
+                )
+            elif args.sample_method == 'ddpm':
+                samples = diffusion.p_sample_loop_difference(
+                    sample_fn, z.shape, args.tweedie_difference_threshold, z, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device=device
+                )
 
         if using_cfg:
             samples, _ = samples.chunk(2, dim=0)  # Remove null class samples
