@@ -13,6 +13,7 @@ import torch
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 
+import io
 import os
 import math
 import argparse
@@ -34,7 +35,9 @@ from diffusers.optimization import get_scheduler
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 from utils import (clip_grad_norm_, create_logger, update_ema, 
-                   requires_grad, cleanup, setup_distributed, get_experiment_dir)
+                   requires_grad, cleanup, setup_distributed,
+                   get_experiment_dir, text_preprocessing)
+from models.diff_utils import *
 import numpy as np
 from transformers import T5EncoderModel, T5Tokenizer
 import wandb
@@ -47,7 +50,7 @@ os.environ['TORCH_DISTRIBUTED_DEBUG'] = 'DETAIL'
 def main(args):
 
     assert torch.cuda.is_available(), "Training currently requires at least one GPU."
-
+    print('starting main')
     # Setup DDP:
     setup_distributed()
 
@@ -58,7 +61,7 @@ def main(args):
     seed = args.global_seed + rank
     torch.manual_seed(seed)
     torch.cuda.set_device(device)
-    print(f"Starting rank={rank}, local rank={local_rank}, seed={seed}, world_size={dist.get_world_size()}.")
+    print(f"Starting rank={rank}, local rank={local_rank}, seed={seed}, world_size={dist.get_world_size()}.")    
     if args.debug:
         print("===============================\nRunning in debug mode.\n===============================")
 
@@ -75,9 +78,8 @@ def main(args):
         experiment_name = f"{experiment_index:03d}-{model_string_name}-{num_frame_string}-{args.dataset}{args.image_size}"
         experiment_dir = f"{args.results_dir}/{args.dataset}{args.image_size}/{experiment_name}"  # Create an experiment folder
         experiment_dir = get_experiment_dir(experiment_dir, args)
-
         checkpoint_dir = f"{experiment_dir}/checkpoints"  # Stores saved model checkpoints
-        os.makedirs(checkpoint_dir, exist_ok=True)
+        os.makedirs(experiment_dir, exist_ok=True)
 
         logger = create_logger(experiment_dir)
         OmegaConf.save(args, os.path.join(experiment_dir, 'config.yaml'))
@@ -87,18 +89,24 @@ def main(args):
         wandb.init(project=project, name=experiment_name, tags=['video_generation', model_string_name, f"{args.dataset}{args.image_size}", "training"]) if args.project else None
     else:
         logger = create_logger(None)
+        # tb_writer = None
 
     # Create model:
     assert args.image_size % 8 == 0, "Image size must be divisible by 8 (for the VAE encoder)."
     sample_size = args.image_size // 8
     args.latent_size = sample_size
     model = get_models(args)
-    print('Model', model)
-
     
-    diffusion = create_diffusion(timestep_respacing="")  # default: 1000 steps, linear noise schedule
-    # vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-ema").to(device)
-    # vae = AutoencoderKL.from_pretrained(args.pretrained_model_path, subfolder="sd-vae-ft-mse").to(device)
+    diffusion = create_diffusion(
+        timestep_respacing=None,
+        noise_schedule="linear",
+        use_kl=False,
+        sigma_small=args.sigma_small if 'sigma_small' in args else False,
+        predict_xstart=args.predict_xstart if 'predict_xstart' in args else False,
+        learn_sigma=args.learn_sigma if 'learn_sigma' in args else True,
+    )  # default: 1000 steps, linear noise schedule
+    print('diffusion', diffusion)
+
     vae = get_vae(OmegaConf.load(args.vae)).to(device)
 
     # # use pretrained model?
@@ -129,26 +137,6 @@ def main(args):
     ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
     requires_grad(ema, False)
   
-    if args.enable_xformers_memory_efficient_attention:
-        logger.info("Using Xformers!")
-        model.enable_xformers_memory_efficient_attention()
-
-    if args.gradient_checkpointing:
-        logger.info("Using gradient checkpointing!")
-        model.enable_gradient_checkpointing()
-
-    if args.fixed_spatial:
-        trainable_modules = (
-        "attn_temp",
-        )
-        model.requires_grad_(False)
-        for name, module in model.named_modules():
-            if name.endswith(tuple(trainable_modules)):
-                for params in module.parameters():
-                    logger.info("WARNING: Only train {} parametes!".format(name))
-                    params.requires_grad = True
-        logger.info("WARNING: Only train {} parametes!".format(trainable_modules))
-
     # set distributed training
     model = DDP(model.to(device), device_ids=[local_rank])
 
@@ -187,6 +175,15 @@ def main(args):
         num_training_steps=args.max_train_steps * args.gradient_accumulation_steps,
     )
 
+    if hasattr(args, 'use_indirect_diff_loss') and args.use_indirect_diff_loss:
+        indirect_diff_coeff = 1.0
+        direct_diff_coeff = 0.0
+        logger.info(f"Using indirect difference loss with coeff {indirect_diff_coeff}")
+    else:
+        indirect_diff_coeff = 0.0
+        direct_diff_coeff = 1.0
+        logger.info(f"Using direct difference loss with coeff {direct_diff_coeff}")
+
     # Prepare models for training:
     update_ema(ema, model.module, decay=0)  # Ensure EMA is initialized with synced weights
     model.train()  # important! This enables embedding dropout for classifier-free guidance
@@ -195,9 +192,21 @@ def main(args):
     # Variables for monitoring/logging purposes:
     train_steps = 0
     log_steps = 0
-    running_loss = 0
-    running_loss_mse = 0
-    running_loss_vb = 0
+
+    running_metrics = {
+        "loss": 0,
+        "xs_loss": 0,
+        "direct_diff_loss": 0,
+        "indirect_diff_loss": 0,
+        "mse": 0,
+        "xs_mse": 0,
+        "direct_diff_mse": 0,
+        "indirect_diff_mse": 0,
+        "vb": 0,
+        "xs_vb": 0,
+        "diff_vb": 0,
+    }
+
     first_epoch = 0
     start_time = time()
 
@@ -221,7 +230,9 @@ def main(args):
         first_epoch = train_steps // num_update_steps_per_epoch
         resume_step = train_steps % num_update_steps_per_epoch
 
-    total_start_time = time()
+    if args.pretrained:
+        train_steps = int(args.pretrained.split("/")[-1].split('.')[0])
+
     for epoch in range(first_epoch, num_train_epochs):
         sampler.set_epoch(epoch)
         for step, video_data in enumerate(loader):
@@ -231,36 +242,37 @@ def main(args):
 
             x = video_data['video'].to(device, non_blocking=True)
             video_name = video_data['video_name']
-            if args.dataset == "ucf101_img":
-                image_name = video_data['image_name']
-                image_names = []
-                for caption in image_name:
-                    single_caption = [int(item) for item in caption.split('=====')]
-                    image_names.append(torch.as_tensor(single_caption))
-            # x = x.to(device)
-            # y = y.to(device) # y is text prompt; no need put in gpu
+            
             if not args.load_latent:
                 x = encode_video(vae, x)  # (B,F,C,H,W)
-
             x = x.mul_(vae.scaler)
 
+            # Get difference
+            diff = get_difference(x)
+            #TODO: add diff norm
+            x = combine_frames_and_difference(x, diff, combine_type='interleave')
+
+            # TODO: add condition for action dataset
             if args.extras == 78: # text-to-video
                 raise 'T2V training are Not supported at this moment!'
             elif args.extras == 2:
-                if args.dataset == "ucf101_img":
-                    model_kwargs = dict(y=video_name, y_image=image_names, use_image_num=args.use_image_num) # tav unet
-                else:
-                    model_kwargs = dict(y=video_name) # tav unet
+                model_kwargs = dict(y=video_name)
             else:
-                model_kwargs = dict(y=None, use_image_num=args.use_image_num)
+                model_kwargs = dict(y=None)
 
             t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
-            loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
-            loss = loss_dict["loss"].mean() / args.gradient_accumulation_steps
+            loss_dict = diffusion.diff_training_losses(model, x, t, model_kwargs)
+            
+            loss = (loss_dict['xs_mse'] + direct_diff_coeff * loss_dict['direct_diff_mse'] + indirect_diff_coeff * loss_dict['indirect_diff_mse']
+            )/(1.0 + direct_diff_coeff + indirect_diff_coeff)
+            # logger.info(f"xs_mse: {loss_dict['xs_mse'].mean().item():.4f}, direct_diff_mse: {loss_dict['direct_diff_mse'].mean().item():.4f}, indirect_diff_mse: {loss_dict['indirect_diff_mse'].mean().item():.4f} loss: {loss.mean().item():.4f}")            
+            running_metrics['mse'] += loss.mean().item() / args.gradient_accumulation_steps
+
+            if 'vb' in loss_dict:
+                loss += loss_dict['vb']
+            
+            loss = loss.mean() / args.gradient_accumulation_steps
             loss.backward()
-            # for logging
-            mse = loss_dict["mse"].mean().item() / args.gradient_accumulation_steps if "mse" in loss_dict else 0.0
-            vb = loss_dict["vb"].mean().item() / args.gradient_accumulation_steps if "vb" in loss_dict else 0.0
 
             if train_steps < args.start_clip_iter: # if train_steps >= start_clip_iter, will clip gradient
                 gradient_norm = clip_grad_norm_(model.module.parameters(), args.clip_max_norm, clip_grad=False)
@@ -273,46 +285,55 @@ def main(args):
                 opt.zero_grad()
                 update_ema(ema, model.module)
 
+            # for logging
+            running_metrics['vb'] += loss_dict['vb'].mean().item() / args.gradient_accumulation_steps if 'vb' in loss_dict else 0.0
+            running_metrics['xs_mse'] += loss_dict['xs_mse'].mean().item() / args.gradient_accumulation_steps
+            running_metrics['xs_loss'] += loss_dict['xs_mse'].mean().item() / args.gradient_accumulation_steps
+            running_metrics['direct_diff_mse'] += loss_dict['direct_diff_mse'].mean().item() / args.gradient_accumulation_steps
+            running_metrics['direct_diff_loss'] += loss_dict['direct_diff_mse'].mean().item() / args.gradient_accumulation_steps
+            running_metrics['indirect_diff_mse'] += loss_dict['indirect_diff_mse'].mean().item() / args.gradient_accumulation_steps
+            running_metrics['indirect_diff_loss'] += loss_dict['indirect_diff_mse'].mean().item() / args.gradient_accumulation_steps
+            running_metrics['loss'] += loss.item()
+
             # Logging
-            running_loss += loss.item()
-            running_loss_mse += mse
-            running_loss_vb += vb
             log_steps += 1
             train_steps += 1
-            if train_steps % args.log_every == 0:
+            if train_steps % args.log_every == 0 or train_steps == 1:
                 # Measure training speed:
                 torch.cuda.synchronize()
                 end_time = time()
                 steps_per_sec = log_steps / (end_time - start_time)
-                # Reduce loss history over all processes:
-                avg_loss = torch.tensor(running_loss / log_steps, device=device)
-                dist.all_reduce(avg_loss, op=dist.ReduceOp.SUM)
-                avg_loss = avg_loss.item() / dist.get_world_size()
-                logger.info(f"(step={train_steps:07d}/epoch={epoch:04d}) Train Loss: {avg_loss:.4f}, Gradient Norm: {gradient_norm:.4f}, Train Steps/Sec: {steps_per_sec:.2f}, ETA: {(time()-total_start_time):.2f}")
+
+                # Reduce running_metrics over all processes
+                reduced_metrics = {}
+                for k, v in running_metrics.items():
+                    t = torch.tensor(v, device=device)
+                    dist.all_reduce(t, op=dist.ReduceOp.SUM)
+                    reduced_metrics[k] = t.item() / dist.get_world_size() / log_steps
+
+                logger.info(f"(step={train_steps:07d}/epoch={epoch:04d}) Loss: {reduced_metrics['loss']:.4f}, xs_loss: {reduced_metrics['xs_loss']:.4f}, direct_diff_loss: {reduced_metrics['direct_diff_loss']:.4f}, indirect_diff_loss: {reduced_metrics['indirect_diff_loss']:.4f}, grad_norm: {gradient_norm:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
 
                 if wandb.run is not None:
                     logging_dict = {
-                        "train/loss": avg_loss,
-                        "train/xs_loss": avg_loss,
+                        "train/loss": reduced_metrics['loss'],
                         "train/grad_norm": gradient_norm
                     }
-                    if 'mse' in loss_dict:
-                        logging_dict["train/loss_mse"] = running_loss_mse / log_steps
-                        logging_dict["train/xs_mse"] = running_loss_mse / log_steps
-                    if 'vb' in loss_dict:
-                        logging_dict["train/loss_vb"] = running_loss_vb / log_steps
-                        logging_dict["train/xs_vb"] = running_loss_vb / log_steps
+                    for k, v in reduced_metrics.items():
+                        if v != 0:
+                            logging_dict[f"train/{k}"] = v
+
                     wandb.log(logging_dict, step=train_steps)
                 # Reset monitoring variables:
-                running_loss = 0
-                running_loss_mse = 0
-                running_loss_vb = 0
+                for k in running_metrics:
+                    running_metrics[k] = 0.0
+
                 log_steps = 0
                 start_time = time()
 
             # Save Latte checkpoint:
             if train_steps % args.ckpt_every == 0 and train_steps > 0:
                 if rank == 0:
+                    os.makedirs(checkpoint_dir, exist_ok=True)
                     checkpoint = {
                         "model": model.module.state_dict(),
                         "ema": ema.state_dict(),

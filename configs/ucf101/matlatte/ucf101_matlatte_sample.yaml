@@ -1,38 +1,35 @@
 # path:
-ckpt: # will be overwrite
-save_img_path: "./sample_videos/" # will be overwrite
+ckpt:
+save_img_path: "./sample_videos/"
 vae: "./configs/vae/autoencoder_kl.yaml"
 
+
 # model config: 
-model: Latte-XL/2
+model: MatLatte-XL/256-256/2
 num_frames: 16
 image_size: 256 # choices=[256, 512]
 in_channels: 4
-frame_interval: 2
+frame_interval: 3
 fixed_spatial: False
 attention_bias: True
 learn_sigma: True
-extras: 1 # [1, 2] 1 unconditional generation, 2 class-conditional generation
-num_classes:
+extras: 2 # [1, 2] 1 unconditional generation, 2 class-conditional generation
+num_classes: 101
 
 # model speedup
 use_compile: False
 use_fp16: False
 
 # sample config:
-seed: 3
+seed:
 sample_method: 'ddpm'
 num_sampling_steps: 250
-cfg_scale: 1.0
-negative_name:
-
-local_batch_size: 16
-total_samples: 2048
-
-# video config
-fps: 8
-video_quality: 9
+cfg_scale: 7.0
+run_time: 12
+num_sample: 1
+sample_names: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+negative_name: 101
 
 # ddp sample config
-per_proc_batch_size: 16
+per_proc_batch_size: 8
 num_fvd_samples: 2048

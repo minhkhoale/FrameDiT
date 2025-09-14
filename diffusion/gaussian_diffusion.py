@@ -996,6 +996,21 @@ class GaussianDiffusion:
             else:
                 terms["loss"] = terms["mse"]
                 terms["loss_no_mean"] = terms["mse_no_mean"]
+            
+            xs_model_output, direct_diff_model_output = uncombine_frames_and_difference(model_output)
+            indirect_diff_model_output = get_difference(xs_model_output)
+
+            xs_target, diff_target = uncombine_frames_and_difference(target)
+
+            terms['xs_mse'] = mean_flat((xs_target - xs_model_output) ** 2)
+            terms['direct_diff_mse'] = mean_flat((diff_target - direct_diff_model_output) ** 2)
+            terms['indirect_diff_mse'] = mean_flat((diff_target - indirect_diff_model_output) ** 2)
+
+            terms["xs_mse_no_mean"] = ((xs_target - xs_model_output) ** 2).detach()
+            terms["direct_diff_mse_no_mean"] = ((diff_target - direct_diff_model_output) ** 2).detach()
+            terms["indirect_diff_mse_no_mean"] = ((diff_target - indirect_diff_model_output) ** 2).detach()
+
+
         else:
             raise NotImplementedError(self.loss_type)
 
