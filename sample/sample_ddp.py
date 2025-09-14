@@ -85,7 +85,15 @@ def main(args):
     state_dict = find_model(ckpt_path)
     model.load_state_dict(state_dict)
     model.eval()  # important!
-    diffusion = create_diffusion(str(args.num_sampling_steps))
+    diffusion = create_diffusion(
+        timestep_respacing=str(args.num_sampling_steps),
+        noise_schedule="linear",
+        use_kl=False,
+        sigma_small=args.sigma_small if 'sigma_small' in args else False,
+        predict_xstart=args.predict_xstart if 'predict_xstart' in args else False,
+        learn_sigma=args.learn_sigma if 'learn_sigma' in args else True,
+    )  # default: 1000 steps, linear noise schedule
+    print('diffusion', diffusion)
 
     vae = get_vae(OmegaConf.load(args.vae)).to(device)
     

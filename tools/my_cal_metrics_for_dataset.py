@@ -9,6 +9,18 @@ from tqdm import tqdm
 
 NUM_FRAMES_IN_BATCH = {64: 256, 128: 128, 256: 128, 512: 64, 1024: 32}
 
+def check_if_video_folder(path: str) -> bool:
+    # if folder contains all video files, return True
+    import os
+    video_extensions = ['.mp4', '.avi', '.mov', '.mkv']
+    if not os.path.isdir(path):
+        return False
+    for fname in os.listdir(path):
+        if not any(fname.lower().endswith(ext) for ext in video_extensions):
+            return False
+    return True
+
+
 def assert_video(video: torch.Tensor):
     assert isinstance(video, torch.Tensor)
     assert video.ndim == 5
@@ -43,8 +55,11 @@ def cal_metrics(
     metrics = metrics.to(device)
     
     dataset_cfg = OmegaConf.create({'max_num_frames': 10000})
+
+    class_name = 'tools.utils.dataset.VideoDataset' if check_if_video_folder(real_data_path) else 'tools.utils.dataset.VideoFramesFolderDataset'
+    print(f'Using {class_name.split('.')[-1]} to load real videos from {real_data_path}')
     args.dataset_kwargs = dnnlib.EasyDict(
-        class_name='tools.utils.dataset.VideoFramesFolderDataset',
+        class_name=class_name,
         path=real_data_path,
         cfg=dataset_cfg,
         load_n_consecutive=num_frames,
@@ -54,8 +69,10 @@ def cal_metrics(
         resolution=resolution,
         use_labels=False,
     )
+    class_name = 'tools.utils.dataset.VideoDataset' if check_if_video_folder(fake_data_path) else 'tools.utils.dataset.VideoFramesFolderDataset'
+    print(f'Using {class_name.split('.')[-1]} to load fake videos from {fake_data_path}')
     args.gen_dataset_kwargs = dnnlib.EasyDict(
-        class_name='tools.utils.dataset.VideoDataset',
+        class_name=class_name,
         path=fake_data_path,
         cfg=dataset_cfg,
         load_n_consecutive=num_frames,

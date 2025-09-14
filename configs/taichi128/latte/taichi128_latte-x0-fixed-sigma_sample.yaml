@@ -4,16 +4,19 @@ save_img_path: "./sample_videos/" # will be overwrite
 vae: "./configs/vae/autoencoder_kl.yaml"
 
 # model config: 
-model: MatLatte-M/16-512/2
+model: Latte-M/2
 num_frames: 16
 image_size: 128 # choices=[256, 512]
 in_channels: 4
 frame_interval: 3
 fixed_spatial: False
 attention_bias: True
-learn_sigma: True
 extras: 1 # [1, 2] 1 unconditional generation, 2 class-conditional generation
 num_classes:
+
+sigma_small: True
+predict_xstart: True
+learn_sigma: False
 
 # model speedup
 use_compile: False

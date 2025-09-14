@@ -200,6 +200,14 @@ class GaussianDiffusion:
         self.posterior_mean_coef2 = (
             (1.0 - self.alphas_cumprod_prev) * np.sqrt(alphas) / (1.0 - self.alphas_cumprod)
         )
+    
+    def __str__(self):
+        return "" \
+        "GaussianDiffusion: \n" \
+        f"  num_timesteps: {self.num_timesteps}\n" \
+        f"  model_mean_type: {self.model_mean_type}\n" \
+        f"  model_var_type: {self.model_var_type}\n" \
+        f"  loss_type: {self.loss_type}"
 
     def q_mean_variance(self, x_start, t):
         """
@@ -1063,6 +1071,7 @@ class GaussianDiffusion:
             "xstart_mse": xstart_mse,
             "mse": mse,
         }
+
 
 
 def _extract_into_tensor(arr, timesteps, broadcast_shape):

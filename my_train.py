@@ -103,7 +103,15 @@ def main(args):
     model = get_models(args)
     print('Model', model)
     
-    diffusion = create_diffusion(timestep_respacing="")  # default: 1000 steps, linear noise schedule
+    diffusion = create_diffusion(
+        timestep_respacing=None,
+        noise_schedule="linear",
+        use_kl=False,
+        sigma_small=args.sigma_small if 'sigma_small' in args else False,
+        predict_xstart=args.predict_xstart if 'predict_xstart' in args else False,
+        learn_sigma=args.learn_sigma if 'learn_sigma' in args else True,
+    )  # default: 1000 steps, linear noise schedule
+    print('diffusion', diffusion)
 
     vae = get_vae(OmegaConf.load(args.vae)).to(device)
 
@@ -273,10 +281,12 @@ def main(args):
                 if wandb.run is not None:
                     logging_dict = {
                         "train/loss": avg_loss,
+                        "train/xs_loss": avg_loss,
                         "train/grad_norm": gradient_norm
                     }
                     if 'mse' in loss_dict:
-                        logging_dict["train/loss_mse"] = running_loss_mse / log_steps
+                        logging_dict["train/mse"] = running_loss_mse / log_steps
+                        logging_dict["train/xs_mse"] = running_loss_mse / log_steps
                     if 'vb' in loss_dict:
                         logging_dict["train/loss_vb"] = running_loss_vb / log_steps
                     wandb.log(logging_dict, step=train_steps)

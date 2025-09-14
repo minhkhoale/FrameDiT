@@ -113,6 +113,9 @@ class SpacedDiffusion(GaussianDiffusion):
     def _scale_timesteps(self, t):
         # Scaling is done by the wrapped model.
         return t
+    
+    def __str__(self):
+        return super().__str__() + f"\n  use_timesteps: {len(self.use_timesteps)}"
 
 
 class _WrappedModel:

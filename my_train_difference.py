@@ -35,8 +35,7 @@ from diffusers.optimization import get_scheduler
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 from utils import (clip_grad_norm_, create_logger, update_ema, 
-                   requires_grad, cleanup, create_tensorboard, 
-                   write_tensorboard, setup_distributed,
+                   requires_grad, cleanup, setup_distributed,
                    get_experiment_dir, text_preprocessing)
 from models.diff_utils import *
 import numpy as np
@@ -98,7 +97,15 @@ def main(args):
     args.latent_size = sample_size
     model = get_models(args)
     
-    diffusion = create_diffusion(timestep_respacing="")  # default: 1000 steps, linear noise schedule
+    diffusion = create_diffusion(
+        timestep_respacing=None,
+        noise_schedule="linear",
+        use_kl=False,
+        sigma_small=args.sigma_small if 'sigma_small' in args else False,
+        predict_xstart=args.predict_xstart if 'predict_xstart' in args else False,
+        learn_sigma=args.learn_sigma if 'learn_sigma' in args else True,
+    )  # default: 1000 steps, linear noise schedule
+    print('diffusion', diffusion)
 
     vae = get_vae(OmegaConf.load(args.vae)).to(device)
 
