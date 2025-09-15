@@ -7,7 +7,7 @@
 #SBATCH --constraint=gpu-v100
 #SBATCH --mem=64GB
 #SBATCH --cpus-per-task=6
-#SBATCH --time=60:00:00
+#SBATCH --time=120:00:00
 #SBATCH --output=slurm_log/Taichi128_MatLatte-64-256-%j.out 
 #SBATCH --error=slurm_log/Taichi128_MatLatte-64-256-%j.err
 

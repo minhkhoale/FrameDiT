@@ -50,7 +50,7 @@ os.environ['TORCH_DISTRIBUTED_DEBUG'] = 'DETAIL'
 def main(args):
 
     assert torch.cuda.is_available(), "Training currently requires at least one GPU."
-    print('starting main')
+    logger.info('starting main')
     # Setup DDP:
     setup_distributed()
 
@@ -61,9 +61,9 @@ def main(args):
     seed = args.global_seed + rank
     torch.manual_seed(seed)
     torch.cuda.set_device(device)
-    print(f"Starting rank={rank}, local rank={local_rank}, seed={seed}, world_size={dist.get_world_size()}.")    
+    logger.info(f"Starting rank={rank}, local rank={local_rank}, seed={seed}, world_size={dist.get_world_size()}.")    
     if args.debug:
-        print("===============================\nRunning in debug mode.\n===============================")
+        logger.info("===============================\nRunning in debug mode.\n===============================")
 
     # Setup an experiment folder:
     if rank == 0:
@@ -105,7 +105,7 @@ def main(args):
         predict_xstart=args.predict_xstart if 'predict_xstart' in args else False,
         learn_sigma=args.learn_sigma if 'learn_sigma' in args else True,
     )  # default: 1000 steps, linear noise schedule
-    print('diffusion', diffusion)
+    logger.info('diffusion', diffusion)
 
     vae = get_vae(OmegaConf.load(args.vae)).to(device)
 
@@ -310,6 +310,7 @@ def main(args):
                             logging_dict[f"train/{k}"] = v
 
                     wandb.log(logging_dict, step=train_steps)
+
                 # Reset monitoring variables:
                 for k in running_metrics:
                     running_metrics[k] = 0.0

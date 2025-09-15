@@ -22,10 +22,10 @@ fixed_spatial: False
 attention_bias: True
 extras: 1 # [1, 2] 1 unconditional generation, 2 class-conditional generation
 
-# diffusion config:
-sigma_small: True
-predict_xstart: True
+diffusion_name: difference_gaussian_diffusion_v1
 learn_sigma: False
+sigma_small: True
+predict_xstart: False
 
 # train config:
 load_from_ceph: False # important
@@ -50,4 +50,4 @@ enable_xformers_memory_efficient_attention: False
 gradient_checkpointing: False
 
 # Wandb logger
-project: 
+project: vdm
