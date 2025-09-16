@@ -756,23 +756,26 @@ def MatLatte_XL_256_512_2(**kwargs):
     return MatLatte_XL_2(qk_col_dim=256, v_col_dim=512, num_col_heads=256, **kwargs)
 
 # For image size 128, 64 tokens per frame
-def MatLatte_M_16_64_2(**kwargs):
-    return MatLatte_M_2(qk_col_dim=16, v_col_dim=64, num_col_heads=16, **kwargs)
-
 def MatLatte_M_4_256_2(**kwargs):
     return MatLatte_M_2(qk_col_dim=4, v_col_dim=256, num_col_heads=4, **kwargs)
+
+def MatLatte_M_4_512_2(**kwargs):
+    return MatLatte_M_2(qk_col_dim=4, v_col_dim=512, num_col_heads=4, **kwargs)
 
 def MatLatte_M_8_256_2(**kwargs):
     return MatLatte_M_2(qk_col_dim=8, v_col_dim=256, num_col_heads=8, **kwargs)
 
+def MatLatte_M_16_512_2(**kwargs):
+    return MatLatte_M_2(qk_col_dim=16, v_col_dim=512, num_col_heads=16, **kwargs)
+
 def MatLatte_M_16_256_2(**kwargs):
     return MatLatte_M_2(qk_col_dim=16, v_col_dim=256, num_col_heads=16, **kwargs)
 
+def MatLatte_M_16_64_2(**kwargs):
+    return MatLatte_M_2(qk_col_dim=16, v_col_dim=64, num_col_heads=16, **kwargs)
+
 def MatLatte_M_32_256_2(**kwargs):
     return MatLatte_M_2(qk_col_dim=32, v_col_dim=256, num_col_heads=32, **kwargs)
-
-def MatLatte_M_16_512_2(**kwargs):
-    return MatLatte_M_2(qk_col_dim=16, v_col_dim=512, num_col_heads=16, **kwargs)
 
 def MatLatte_M_64_64_2(**kwargs):
     return MatLatte_M_2(qk_col_dim=64, v_col_dim=64, num_col_heads=64, **kwargs)
@@ -787,10 +790,12 @@ def MatLatte_B_16_16_2(**kwargs):
 
 
 MatLatte_models = {
-    'MatLatte-B/16-16/2': MatLatte_B_16_16_2,
-    'MatLatte-M/64-64/2': MatLatte_M_64_64_2, 'MatLatte-M/16-64/2': MatLatte_M_16_64_2, 'MatLatte-M/64-256/2': MatLatte_M_64_256_2, 
-    'MatLatte-M/16-256/2': MatLatte_M_16_256_2, 'MatLatte-M/16-512/2': MatLatte_M_16_512_2,
-    'MatLatte-M/4-256/2': MatLatte_M_4_256_2, 'MatLatte-M/8-256/2': MatLatte_M_8_256_2, 'MatLatte-M/32-256/2': MatLatte_M_32_256_2,
+    
+    'MatLatte-M/64-64/2': MatLatte_M_64_64_2, 'MatLatte-M/64-256/2': MatLatte_M_64_256_2, 
+    'MatLatte-B/16-16/2': MatLatte_B_16_16_2, 'MatLatte-M/16-64/2': MatLatte_M_16_64_2, 'MatLatte-M/16-256/2': MatLatte_M_16_256_2, 'MatLatte-M/16-512/2': MatLatte_M_16_512_2,
+    'MatLatte-M/32-256/2': MatLatte_M_32_256_2,
+    'MatLatte-M/8-256/2': MatLatte_M_8_256_2, 
+    'MatLatte-M/4-256/2': MatLatte_M_4_256_2, 'MatLatte-M/4-512/2': MatLatte_M_4_512_2, 
     'MatLatte-XL/64-512/2': MatLatte_XL_64_512_2, 'MatLatte-XL/128-512/2': MatLatte_XL_128_512_2, 'MatLatte-XL/256-256/2': MatLatte_XL_256_256_2,
     'MatLatte-XL/128-1024/2': MatLatte_XL_128_1024_2, 'MatLatte-XL/256-512/2': MatLatte_XL_256_512_2
 }
