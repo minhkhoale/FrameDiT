@@ -50,7 +50,6 @@ os.environ['TORCH_DISTRIBUTED_DEBUG'] = 'DETAIL'
 def main(args):
 
     assert torch.cuda.is_available(), "Training currently requires at least one GPU."
-    logger.info('starting main')
     # Setup DDP:
     setup_distributed()
 
@@ -61,9 +60,7 @@ def main(args):
     seed = args.global_seed + rank
     torch.manual_seed(seed)
     torch.cuda.set_device(device)
-    logger.info(f"Starting rank={rank}, local rank={local_rank}, seed={seed}, world_size={dist.get_world_size()}.")    
-    if args.debug:
-        logger.info("===============================\nRunning in debug mode.\n===============================")
+
 
     # Setup an experiment folder:
     if rank == 0:
@@ -90,6 +87,11 @@ def main(args):
     else:
         logger = create_logger(None)
         # tb_writer = None
+    
+    logger.info('starting main')
+    logger.info(f"Starting rank={rank}, local rank={local_rank}, seed={seed}, world_size={dist.get_world_size()}.")    
+    if args.debug:
+        logger.info("===============================\nRunning in debug mode.\n===============================")
 
     # Create model:
     assert args.image_size % 8 == 0, "Image size must be divisible by 8 (for the VAE encoder)."
@@ -99,13 +101,14 @@ def main(args):
     
     diffusion = create_diffusion(
         timestep_respacing=None,
+        name=args.diffusion_name if hasattr(args, 'diffusion_name') else 'difference_gaussian_diffusion_v0',
         noise_schedule="linear",
         use_kl=False,
         sigma_small=args.sigma_small if 'sigma_small' in args else False,
         predict_xstart=args.predict_xstart if 'predict_xstart' in args else False,
         learn_sigma=args.learn_sigma if 'learn_sigma' in args else True,
     )  # default: 1000 steps, linear noise schedule
-    logger.info('diffusion', diffusion)
+    logger.info(f'diffusion {diffusion}')
 
     vae = get_vae(OmegaConf.load(args.vae)).to(device)
 
@@ -250,7 +253,7 @@ def main(args):
                 model_kwargs = dict(y=None)
 
             t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
-            loss_dict = diffusion.diff_training_losses(model, x, t, model_kwargs)
+            loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
             loss = loss_dict["loss"].mean() / args.gradient_accumulation_steps
             loss.backward()
 

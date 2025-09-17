@@ -10,6 +10,7 @@ from .ffs_image_datasets import FaceForensicsImages
 from .sky_image_datasets import SkyImages
 from .ucf101_image_datasets import UCF101Images
 from .taichi_image_datasets import TaichiImages
+from .taichi_image_latent_datasets import TaichiImagesLatent
 
 
 def get_dataset(args):
@@ -73,12 +74,16 @@ def get_dataset(args):
                 ])
             return Taichi(args, transform=transform_taichi, temporal_sample=temporal_sample)
     elif args.dataset == 'taichi_img':
-        transform_taichi = transforms.Compose([
-            video_transforms.ToTensorVideo(), # TCHW
-            video_transforms.RandomHorizontalFlipVideo(),
-            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
-        ])
-        return TaichiImages(args, transform=transform_taichi, temporal_sample=temporal_sample)
+        if args.load_latent:
+            transform_taichi = transforms.Compose([])
+            return TaichiImagesLatent(args, transform=transform_taichi, temporal_sample=temporal_sample)
+        else:
+            transform_taichi = transforms.Compose([
+                video_transforms.ToTensorVideo(), # TCHW
+                video_transforms.RandomHorizontalFlipVideo(),
+                transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
+            ])
+            return TaichiImages(args, transform=transform_taichi, temporal_sample=temporal_sample)
     elif args.dataset == 'sky':
         if args.load_latent:
             transform_sky = transforms.Compose([])

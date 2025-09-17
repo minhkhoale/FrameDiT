@@ -1,18 +1,18 @@
 # dataset
-dataset: "taichi"
+dataset: "taichi_img"
 
-data_path: "/scratch/s224075134/temporal_diffusion/datasets/video/taichi/train"
-latent_path:
-load_latent: False
+data_path: null
+latent_path: "/scratch/s224075134/temporal_diffusion/datasets/video/taichi_latent_16_kl_f8_autoencoder/train"
+load_latent: True
 
 vae: "./configs/vae/autoencoder_kl.yaml"
 
 # save and load
-results_dir: "./results"
-pretrained: /scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/results/taichi128/000-DiffLatte-M-2-F16S3-taichi128/checkpoints/0130000.pt
+results_dir: "./results_img"
+pretrained:
 
 # model config: 
-model: DiffLatte-M/2
+model: LatteIMG-M/2
 num_frames: 16
 image_size: 128 # choices=[256, 512]
 in_channels: 4
@@ -22,25 +22,23 @@ fixed_spatial: False
 attention_bias: True
 extras: 1 # [1, 2] 1 unconditional generation, 2 class-conditional generation
 
-diffusion_name: difference_gaussian_diffusion_v1
 learn_sigma: True
-sigma_small: True
-predict_xstart: False
 
 # train config:
 load_from_ceph: False # important
+use_image_num: 8
 learning_rate: 1e-4
 ckpt_every: 10000
 clip_max_norm: 0.1
 start_clip_iter: 500000
-local_batch_size: 5 # important
+local_batch_size: 4 # important
 max_train_steps: 1000000
 global_seed: 3407
-num_workers: 6
+num_workers: 8
 log_every: 50
 lr_warmup_steps: 0
 resume_from_checkpoint:
-gradient_accumulation_steps: 3 # TODO
+gradient_accumulation_steps: 4 # TODO
 num_classes:
 
 # low VRAM and speed up training TODO
@@ -49,5 +47,4 @@ mixed_precision: False
 enable_xformers_memory_efficient_attention: False
 gradient_checkpointing: False
 
-# Wandb logger
 project: vdm

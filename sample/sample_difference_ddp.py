@@ -28,7 +28,7 @@ import argparse
 import imageio
 from omegaconf import OmegaConf
 from models import get_models
-from models.diff_utils import uncombine_frames_and_difference
+from models.diff_utils import uncombine_frames_and_difference, get_difference
 from einops import rearrange
 from vae import get_vae, decode_video
 os.environ['TORCH_DISTRIBUTED_DEBUG'] = 'DETAIL'
@@ -87,7 +87,15 @@ def main(args):
     state_dict = find_model(ckpt_path)
     model.load_state_dict(state_dict)
     model.eval()  # important!
-    diffusion = create_diffusion(str(args.num_sampling_steps))
+    diffusion = create_diffusion(
+        timestep_respacing=None,
+        name=args.diffusion_name if hasattr(args, 'diffusion_name') else 'difference_gaussian_diffusion_v0',
+        noise_schedule="linear",
+        use_kl=False,
+        sigma_small=args.sigma_small if 'sigma_small' in args else False,
+        predict_xstart=args.predict_xstart if 'predict_xstart' in args else False,
+        learn_sigma=args.learn_sigma if 'learn_sigma' in args else True,
+    )  # default: 1000 steps, linear noise schedule
 
     vae = get_vae(OmegaConf.load(args.vae)).to(device)
     
@@ -114,6 +122,13 @@ def main(args):
         print(f"Saving .mp4 samples at {sample_folder_dir}")
     dist.barrier()
 
+    # check existing videos and skip them
+    n_existing_video = len([name for name in os.listdir(sample_folder_dir) if os.path.isfile(os.path.join(sample_folder_dir, name)) and name.endswith('.mp4')])
+    if n_existing_video > 0:
+        print(f"Found {n_existing_video} existing videos in {sample_folder_dir}, skipping them.")
+
+    args.num_fvd_samples -= n_existing_video
+
     # Figure out how many samples we need to generate on each GPU and how many iterations we need to run:
     n = args.per_proc_batch_size
     global_batch_size = n * dist.get_world_size()
@@ -127,17 +142,14 @@ def main(args):
     iterations = int(samples_needed_this_gpu // n)
     pbar = range(iterations)
     pbar = tqdm(pbar) if rank == 0 else pbar
-    total = 0
+    total = n_existing_video
     args.tweedie_difference_threshold = int(args.tweedie_difference_threshold*args.num_sampling_steps)
+    print('diffusion', diffusion)
     print("Num sampling steps:", args.num_sampling_steps)
     print("Sampling method:", args.sample_method)
     print('Tweedie difference threshold:', args.tweedie_difference_threshold)
     for _ in pbar:
-        # Sample inputs:
-        if args.use_fp16:
-            z = torch.randn(n, args.num_frames*2-1, args.in_channels, latent_size, latent_size, dtype=torch.float16, device=device)
-        else:
-            z = torch.randn(n, args.num_frames*2-1, args.in_channels, latent_size, latent_size, device=device)
+        z = diffusion.sample_init_noise(n, args.num_frames, args.in_channels, latent_size, device, dtype=torch.float16 if args.use_fp16 else torch.float32)
         
         # Setup classifier-free guidance:
         if using_cfg:
@@ -151,24 +163,14 @@ def main(args):
             model_kwargs = dict(y=None, use_fp16=args.use_fp16)
             sample_fn = model.forward
 
-        if args.tweedie_difference_threshold <= 0:
-            if args.sample_method == 'ddim':
-                samples = diffusion.ddim_sample_loop(
-                    sample_fn, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device=device
-                )
-            elif args.sample_method == 'ddpm':
-                samples = diffusion.p_sample_loop(
-                    sample_fn, z.shape, z, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device=device
-                )
-        else:
-            if args.sample_method == 'ddim':
-                samples = diffusion.ddim_sample_loop_difference(
-                    sample_fn, z.shape, args.tweedie_difference_threshold, z, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device=device
-                )
-            elif args.sample_method == 'ddpm':
-                samples = diffusion.p_sample_loop_difference(
-                    sample_fn, z.shape, args.tweedie_difference_threshold, z, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device=device
-                )
+        if args.sample_method == 'ddim':
+            samples = diffusion.ddim_sample_loop(
+                sample_fn, z.shape, args.tweedie_difference_threshold, z, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device=device
+            )
+        elif args.sample_method == 'ddpm':
+            samples = diffusion.p_sample_loop(
+                sample_fn, z.shape, args.tweedie_difference_threshold, z, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device=device
+            )
 
         if using_cfg:
             samples, _ = samples.chunk(2, dim=0)  # Remove null class samples

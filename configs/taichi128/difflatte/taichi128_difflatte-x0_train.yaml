@@ -9,7 +9,7 @@ vae: "./configs/vae/autoencoder_kl.yaml"
 
 # save and load
 results_dir: "./results"
-pretrained: /scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/results/taichi128/000-DiffLatte-M-2-F16S3-taichi128/checkpoints/0130000.pt
+pretrained:
 
 # model config: 
 model: DiffLatte-M/2
@@ -22,10 +22,10 @@ fixed_spatial: False
 attention_bias: True
 extras: 1 # [1, 2] 1 unconditional generation, 2 class-conditional generation
 
-diffusion_name: difference_gaussian_diffusion_v1
+# diffusion config:
+sigma_small: False
+predict_xstart: True
 learn_sigma: True
-sigma_small: True
-predict_xstart: False
 
 # train config:
 load_from_ceph: False # important

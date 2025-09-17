@@ -9,9 +9,8 @@ import math
 import numpy as np
 import torch as th
 import enum
-from einops import repeat
+
 from .diffusion_utils import discretized_gaussian_log_likelihood, normal_kl
-from models.diff_utils import *
 
 
 def mean_flat(tensor):
@@ -260,7 +259,7 @@ class GaussianDiffusion:
         )
         return posterior_mean, posterior_variance, posterior_log_variance_clipped
 
-    def p_mean_variance(self, model, x, t, clip_denoised=True, denoised_fn=None, model_kwargs=None, tweedie_difference_mask=None):
+    def p_mean_variance(self, model, x, t, clip_denoised=True, denoised_fn=None, model_kwargs=None):
         """
         Apply the model to get p(x_{t-1} | x_t), as well as a prediction of
         the initial x, x_0.
@@ -274,7 +273,6 @@ class GaussianDiffusion:
             clip_denoised.
         :param model_kwargs: if not None, a dict of extra keyword arguments to
             pass to the model. This can be used for conditioning.
-        :param tweedie_difference_mask: [N] if True, use tweedie of diff based of tweedie of frames, otherwise use predicted diff directly
         :return: a dict with the following keys:
                  - 'mean': the model mean output.
                  - 'variance': the model variance output.
@@ -334,13 +332,6 @@ class GaussianDiffusion:
             pred_xstart = process_xstart(
                 self._predict_xstart_from_eps(x_t=x, t=t, eps=model_output)
             )
-        if tweedie_difference_mask is not None:
-            original_pred_xstart = pred_xstart.clone()
-            pred_frame_start, _ = uncombine_frames_and_difference(pred_xstart)
-            td_pred_diff_start = get_difference(pred_frame_start)
-            td_pred_xstart = combine_frames_and_difference(pred_frame_start, td_pred_diff_start)
-            pred_xstart = th.where(tweedie_difference_mask[:, None, None, None, None], td_pred_xstart, pred_xstart)
-
         model_mean, _, _ = self.q_posterior_mean_variance(x_start=pred_xstart, x_t=x, t=t)
 
         assert model_mean.shape == model_log_variance.shape == pred_xstart.shape == x.shape
@@ -349,7 +340,6 @@ class GaussianDiffusion:
             "variance": model_variance,
             "log_variance": model_log_variance,
             "pred_xstart": pred_xstart,
-            "original_pred_xstart": original_pred_xstart if tweedie_difference_mask is not None else None,
             "extra": extra,
         }
 
@@ -395,7 +385,61 @@ class GaussianDiffusion:
         out["mean"], _, _ = self.q_posterior_mean_variance(x_start=out["pred_xstart"], x_t=x, t=t)
         return out
 
-    def p_sample_loop(self, model, shape, noise=None, clip_denoised=True, denoised_fn=None, cond_fn=None, model_kwargs=None, device=None, progress=False):
+    def p_sample(
+        self,
+        model,
+        x,
+        t,
+        clip_denoised=True,
+        denoised_fn=None,
+        cond_fn=None,
+        model_kwargs=None,
+    ):
+        """
+        Sample x_{t-1} from the model at the given timestep.
+        :param model: the model to sample from.
+        :param x: the current tensor at x_{t-1}.
+        :param t: the value of t, starting at 0 for the first diffusion step.
+        :param clip_denoised: if True, clip the x_start prediction to [-1, 1].
+        :param denoised_fn: if not None, a function which applies to the
+            x_start prediction before it is used to sample.
+        :param cond_fn: if not None, this is a gradient function that acts
+                        similarly to the model.
+        :param model_kwargs: if not None, a dict of extra keyword arguments to
+            pass to the model. This can be used for conditioning.
+        :return: a dict containing the following keys:
+                 - 'sample': a random sample from the model.
+                 - 'pred_xstart': a prediction of x_0.
+        """
+        out = self.p_mean_variance(
+            model,
+            x,
+            t,
+            clip_denoised=clip_denoised,
+            denoised_fn=denoised_fn,
+            model_kwargs=model_kwargs,
+        )
+        noise = th.randn_like(x)
+        nonzero_mask = (
+            (t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
+        )  # no noise when t == 0
+        if cond_fn is not None:
+            out["mean"] = self.condition_mean(cond_fn, out, x, t, model_kwargs=model_kwargs)
+        sample = out["mean"] + nonzero_mask * th.exp(0.5 * out["log_variance"]) * noise
+        return {"sample": sample, "pred_xstart": out["pred_xstart"]}
+
+    def p_sample_loop(
+        self,
+        model,
+        shape,
+        noise=None,
+        clip_denoised=True,
+        denoised_fn=None,
+        cond_fn=None,
+        model_kwargs=None,
+        device=None,
+        progress=False,
+    ):
         """
         Generate samples from the model.
         :param model: the model module.
@@ -416,14 +460,31 @@ class GaussianDiffusion:
         """
         final = None
         for sample in self.p_sample_loop_progressive(
-            model, shape, noise=noise, clip_denoised=clip_denoised,
-            denoised_fn=denoised_fn, cond_fn=cond_fn,
-            model_kwargs=model_kwargs, device=device, progress=progress,
+            model,
+            shape,
+            noise=noise,
+            clip_denoised=clip_denoised,
+            denoised_fn=denoised_fn,
+            cond_fn=cond_fn,
+            model_kwargs=model_kwargs,
+            device=device,
+            progress=progress,
         ):
             final = sample
         return final["sample"]
 
-    def p_sample_loop_progressive(self, model, shape, noise=None, clip_denoised=True,denoised_fn=None, cond_fn=None, model_kwargs=None, device=None, progress=False):
+    def p_sample_loop_progressive(
+        self,
+        model,
+        shape,
+        noise=None,
+        clip_denoised=True,
+        denoised_fn=None,
+        cond_fn=None,
+        model_kwargs=None,
+        device=None,
+        progress=False,
+    ):
         """
         Generate samples from the model and yield intermediate samples from
         each timestep of diffusion.
@@ -461,157 +522,28 @@ class GaussianDiffusion:
                 yield out
                 img = out["sample"]
 
-    def p_sample(self, model, x, t, clip_denoised=True, denoised_fn=None, cond_fn=None, model_kwargs=None):
-        """
-        Sample x_{t-1} from the model at the given timestep.
-        :param model: the model to sample from.
-        :param x: the current tensor at x_{t-1}.
-        :param t: the value of t, starting at 0 for the first diffusion step.
-        :param clip_denoised: if True, clip the x_start prediction to [-1, 1].
-        :param denoised_fn: if not None, a function which applies to the
-            x_start prediction before it is used to sample.
-        :param cond_fn: if not None, this is a gradient function that acts
-                        similarly to the model.
-        :param model_kwargs: if not None, a dict of extra keyword arguments to
-            pass to the model. This can be used for conditioning.
-        :return: a dict containing the following keys:
-                 - 'sample': a random sample from the model.
-                 - 'pred_xstart': a prediction of x_0.
-        """
-        out = self.p_mean_variance(
-            model,
-            x,
-            t,
-            clip_denoised=clip_denoised,
-            denoised_fn=denoised_fn,
-            model_kwargs=model_kwargs,
-        )
-        noise = th.randn_like(x)
-        nonzero_mask = (
-            (t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
-        )  # no noise when t == 0
-        if cond_fn is not None:
-            out["mean"] = self.condition_mean(cond_fn, out, x, t, model_kwargs=model_kwargs)
-        
-        sample = out["mean"] + nonzero_mask * th.exp(0.5 * out["log_variance"]) * noise
-        return {"sample": sample, "pred_xstart": out["pred_xstart"]}
-
-    def p_sample_loop_difference(self, model, shape, tweedie_difference_threshold, noise=None, clip_denoised=True, denoised_fn=None, cond_fn=None, model_kwargs=None, device=None, progress=False):
-        """
-        Generate samples from the model.
-        :param model: the model module.
-        :param shape: the shape of the samples, (N, C, H, W).
-        :param noise: if specified, the noise from the encoder to sample.
-                      Should be of the same shape as `shape`.
-        :param clip_denoised: if True, clip x_start predictions to [-1, 1].
-        :param denoised_fn: if not None, a function which applies to the
-            x_start prediction before it is used to sample.
-        :param cond_fn: if not None, this is a gradient function that acts
-                        similarly to the model.
-        :param model_kwargs: if not None, a dict of extra keyword arguments to
-            pass to the model. This can be used for conditioning.
-        :param device: if specified, the device to create the samples on.
-                       If not specified, use a model parameter's device.
-        :param progress: if True, show a tqdm progress bar.
-        :return: a non-differentiable batch of samples.
-        """
-        final = None
-        for sample in self.p_sample_difference_loop_progressive(
-            model, shape, noise=noise, clip_denoised=clip_denoised,
-            denoised_fn=denoised_fn, cond_fn=cond_fn,
-            model_kwargs=model_kwargs, device=device,
-            progress=progress,
-            tweedie_difference_threshold=tweedie_difference_threshold
-        ):
-            final = sample
-        return final["sample"]
-
-    def p_sample_difference_loop_progressive(self, model, shape, tweedie_difference_threshold, noise=None, clip_denoised=True, denoised_fn=None, cond_fn=None, model_kwargs=None, device=None, progress=False):
-        """
-        Generate samples from the model and yield intermediate samples from
-        each timestep of diffusion.
-        Arguments are the same as p_sample_loop().
-        Returns a generator over dicts, where each dict is the return value of
-        p_sample().
-        """
-        assert tweedie_difference_threshold is not None, "Tweedie difference threshold must be provided."
-        if device is None:
-            device = next(model.parameters()).device
-        assert isinstance(shape, (tuple, list))
-        if noise is not None:
-            img = noise
-        else:
-            img = th.randn(*shape, device=device)
-        indices = list(range(self.num_timesteps))[::-1]
-
-        if progress:
-            # Lazy import so that we don't depend on tqdm.
-            from tqdm.auto import tqdm
-
-            indices = tqdm(indices)
-
-        for i in indices:
-            t = th.tensor([i] * shape[0], device=device)
-            with th.no_grad():
-                out = self.p_sample_difference(
-                    model,
-                    img,
-                    t,
-                    clip_denoised=clip_denoised,
-                    denoised_fn=denoised_fn,
-                    cond_fn=cond_fn,
-                    model_kwargs=model_kwargs,
-                    tweedie_difference_threshold=tweedie_difference_threshold
-                )
-                yield out
-                img = out["sample"]
-
-    def p_sample_difference(self, model, x, t, clip_denoised=True, denoised_fn=None, cond_fn=None, model_kwargs=None, tweedie_difference_threshold=0.0):
-        """
-        Sample x_{t-1} from the model at the given timestep.
-        :param model: the model to sample from.
-        :param x: the current tensor at x_{t-1}.
-        :param t: the value of t, starting at 0 for the first diffusion step.
-        :param clip_denoised: if True, clip the x_start prediction to [-1, 1].
-        :param denoised_fn: if not None, a function which applies to the
-            x_start prediction before it is used to sample.
-        :param cond_fn: if not None, this is a gradient function that acts
-                        similarly to the model.
-        :param model_kwargs: if not None, a dict of extra keyword arguments to
-            pass to the model. This can be used for conditioning.
-        :tweedie_difference_threshold: Threshold to apply calculating tweedie of diff based of tweedie of frames, continuous value 0.0 <= t <= 1.0
-        :return: a dict containing the following keys:
-                 - 'sample': a random sample from the model.
-                 - 'pred_xstart': a prediction of x_0.
-        """
-        out = self.p_mean_variance(
-            model,
-            x,
-            t,
-            clip_denoised=clip_denoised,
-            denoised_fn=denoised_fn,
-            model_kwargs=model_kwargs,
-            tweedie_difference_mask=(t<=tweedie_difference_threshold)
-
-        )
-        noise = th.randn_like(x)
-        nonzero_mask = (
-            (t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
-        )  # no noise when t == 0
-        if cond_fn is not None:
-            out["mean"] = self.condition_mean(cond_fn, out, x, t, model_kwargs=model_kwargs)
-            
-        sample = out["mean"] + nonzero_mask * th.exp(0.5 * out["log_variance"]) * noise
-        return {"sample": sample, "pred_xstart": out["pred_xstart"]}
-
-    def ddim_sample(self, model, x, t, clip_denoised=True, denoised_fn=None, cond_fn=None, model_kwargs=None, eta=0.0):
+    def ddim_sample(
+        self,
+        model,
+        x,
+        t,
+        clip_denoised=True,
+        denoised_fn=None,
+        cond_fn=None,
+        model_kwargs=None,
+        eta=0.0,
+    ):
         """
         Sample x_{t-1} from the model using DDIM.
         Same usage as p_sample().
         """
         out = self.p_mean_variance(
-            model, x, t, clip_denoised=clip_denoised,
-            denoised_fn=denoised_fn, model_kwargs=model_kwargs,
+            model,
+            x,
+            t,
+            clip_denoised=clip_denoised,
+            denoised_fn=denoised_fn,
+            model_kwargs=model_kwargs,
         )
         if cond_fn is not None:
             out = self.condition_score(cond_fn, out, x, t, model_kwargs=model_kwargs)
@@ -639,43 +571,17 @@ class GaussianDiffusion:
         sample = mean_pred + nonzero_mask * sigma * noise
         return {"sample": sample, "pred_xstart": out["pred_xstart"]}
 
-    def ddim_sample_difference(self, model, x, t, clip_denoised=True, denoised_fn=None, cond_fn=None, model_kwargs=None, eta=0.0, tweedie_difference_threshold=0.0):
-        """
-        Sample x_{t-1} from the model using DDIM.
-        Same usage as p_sample().
-        """
-        out = self.p_mean_variance(
-            model, x, t, clip_denoised=clip_denoised,
-            denoised_fn=denoised_fn, model_kwargs=model_kwargs,
-            tweedie_difference_mask=(t<=tweedie_difference_threshold)
-        )
-        if cond_fn is not None:
-            out = self.condition_score(cond_fn, out, x, t, model_kwargs=model_kwargs)
-
-        # Usually our model outputs epsilon, but we re-derive it
-        # in case we used x_start or x_prev prediction.
-        eps = self._predict_eps_from_xstart(x, t, out["original_pred_xstart"])
-
-        alpha_bar = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
-        alpha_bar_prev = _extract_into_tensor(self.alphas_cumprod_prev, t, x.shape)
-        sigma = (
-            eta
-            * th.sqrt((1 - alpha_bar_prev) / (1 - alpha_bar))
-            * th.sqrt(1 - alpha_bar / alpha_bar_prev)
-        )
-        # Equation 12.
-        noise = th.randn_like(x)
-        mean_pred = (
-            out["original_pred_xstart"] * th.sqrt(alpha_bar_prev)
-            + th.sqrt(1 - alpha_bar_prev - sigma ** 2) * eps
-        )
-        nonzero_mask = (
-            (t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
-        )  # no noise when t == 0
-        sample = mean_pred + nonzero_mask * sigma * noise
-        return {"sample": sample, "pred_xstart": out["pred_xstart"]}
-
-    def ddim_reverse_sample(self, model, x, t, clip_denoised=True, denoised_fn=None, cond_fn=None, model_kwargs=None, eta=0.0, ):
+    def ddim_reverse_sample(
+        self,
+        model,
+        x,
+        t,
+        clip_denoised=True,
+        denoised_fn=None,
+        cond_fn=None,
+        model_kwargs=None,
+        eta=0.0,
+    ):
         """
         Sample x_{t+1} from the model using DDIM reverse ODE.
         """
@@ -703,37 +609,52 @@ class GaussianDiffusion:
 
         return {"sample": mean_pred, "pred_xstart": out["pred_xstart"]}
 
-    def ddim_sample_loop(self, model, shape, noise=None, clip_denoised=True, denoised_fn=None, cond_fn=None, model_kwargs=None, device=None, progress=False, eta=0.0):
+    def ddim_sample_loop(
+        self,
+        model,
+        shape,
+        noise=None,
+        clip_denoised=True,
+        denoised_fn=None,
+        cond_fn=None,
+        model_kwargs=None,
+        device=None,
+        progress=False,
+        eta=0.0,
+    ):
         """
         Generate samples from the model using DDIM.
         Same usage as p_sample_loop().
         """
         final = None
         for sample in self.ddim_sample_loop_progressive(
-            model, shape, noise=noise, clip_denoised=clip_denoised,
-            denoised_fn=denoised_fn, cond_fn=cond_fn,
-            model_kwargs=model_kwargs, device=device,
-            progress=progress, eta=eta,
+            model,
+            shape,
+            noise=noise,
+            clip_denoised=clip_denoised,
+            denoised_fn=denoised_fn,
+            cond_fn=cond_fn,
+            model_kwargs=model_kwargs,
+            device=device,
+            progress=progress,
+            eta=eta,
         ):
             final = sample
         return final["sample"]
 
-    def ddim_sample_loop_difference(self, model, shape, tweedie_difference_threshold, noise=None, clip_denoised=True, denoised_fn=None, cond_fn=None, model_kwargs=None, device=None, progress=False, eta=0.0):
-        """
-        Generate samples from the model using DDIM.
-        Same usage as p_sample_loop().
-        """
-        final = None
-        for sample in self.ddim_sample_loop_difference_progressive(
-            model, shape, noise=noise, clip_denoised=clip_denoised,
-            denoised_fn=denoised_fn, cond_fn=cond_fn, model_kwargs=model_kwargs,
-            device=device, progress=progress, eta=eta,
-            tweedie_difference_threshold=tweedie_difference_threshold
-        ):
-            final = sample
-        return final["sample"]
-
-    def ddim_sample_loop_progressive(self, model, shape, noise=None, clip_denoised=True, denoised_fn=None, cond_fn=None, model_kwargs=None, device=None, progress=False, eta=0.0):
+    def ddim_sample_loop_progressive(
+        self,
+        model,
+        shape,
+        noise=None,
+        clip_denoised=True,
+        denoised_fn=None,
+        cond_fn=None,
+        model_kwargs=None,
+        device=None,
+        progress=False,
+        eta=0.0,
+    ):
         """
         Use DDIM to sample from the model and yield intermediate samples from
         each timestep of DDIM.
@@ -758,43 +679,14 @@ class GaussianDiffusion:
             t = th.tensor([i] * shape[0], device=device)
             with th.no_grad():
                 out = self.ddim_sample(
-                    model, img, t, clip_denoised=clip_denoised,
-                    denoised_fn=denoised_fn, cond_fn=cond_fn,
-                    model_kwargs=model_kwargs, eta=eta,
-                )
-                yield out
-                img = out["sample"]
-
-    def ddim_sample_loop_difference_progressive(self, model, shape, tweedie_difference_threshold, noise=None, clip_denoised=True, denoised_fn=None, cond_fn=None, model_kwargs=None, device=None, progress=False, eta=0.0):
-        """
-        Use DDIM to sample from the model and yield intermediate samples from
-        each timestep of DDIM.
-        Same usage as p_sample_loop_progressive().
-        """
-        assert tweedie_difference_threshold is not None, "Tweedie difference threshold must be provided."
-        if device is None:
-            device = next(model.parameters()).device
-        assert isinstance(shape, (tuple, list))
-        if noise is not None:
-            img = noise
-        else:
-            img = th.randn(*shape, device=device)
-        indices = list(range(self.num_timesteps))[::-1]
-
-        if progress:
-            # Lazy import so that we don't depend on tqdm.
-            from tqdm.auto import tqdm
-
-            indices = tqdm(indices)
-
-        for i in indices:
-            t = th.tensor([i] * shape[0], device=device)
-            with th.no_grad():
-                out = self.ddim_sample_difference(
-                    model, img, t, clip_denoised=clip_denoised,
-                    denoised_fn=denoised_fn, cond_fn=cond_fn,
-                    model_kwargs=model_kwargs, eta=eta,
-                    tweedie_difference_threshold=tweedie_difference_threshold
+                    model,
+                    img,
+                    t,
+                    clip_denoised=clip_denoised,
+                    denoised_fn=denoised_fn,
+                    cond_fn=cond_fn,
+                    model_kwargs=model_kwargs,
+                    eta=eta,
                 )
                 yield out
                 img = out["sample"]
@@ -810,36 +702,27 @@ class GaussianDiffusion:
                  - 'output': a shape [N] tensor of NLLs or KLs.
                  - 'pred_xstart': the x_0 predictions.
         """
-        B,F,C,H,W = x_t.shape
         true_mean, _, true_log_variance_clipped = self.q_posterior_mean_variance(
             x_start=x_start, x_t=x_t, t=t
         )
         out = self.p_mean_variance(
             model, x_t, t, clip_denoised=clip_denoised, model_kwargs=model_kwargs
         )
-
-        # --- KL part ---
-        # q(x_{t-1} | x_t, x_0) || p(x_{t-1} | x_t)
         kl = normal_kl(
             true_mean, true_log_variance_clipped, out["mean"], out["log_variance"]
         )
-        kl_mean = mean_flat(kl) / np.log(2.0)
-        kl_no_mean = kl / np.log(2.0)
+        kl = mean_flat(kl) / np.log(2.0)
 
-        # --- Decoder NLL part ---
-        # -log p(x_0 | x_1)
         decoder_nll = -discretized_gaussian_log_likelihood(
             x_start, means=out["mean"], log_scales=0.5 * out["log_variance"]
         )
         assert decoder_nll.shape == x_start.shape
-        decoder_nll_mean = mean_flat(decoder_nll) / np.log(2.0)
-        decoder_nll_no_mean = decoder_nll / np.log(2.0)
+        decoder_nll = mean_flat(decoder_nll) / np.log(2.0)
 
         # At the first timestep return the decoder NLL,
         # otherwise return KL(q(x_{t-1}|x_t,x_0) || p(x_{t-1}|x_t))
-        output_mean = th.where((t == 0), decoder_nll_mean, kl_mean)
-        output_no_mean = th.where((repeat(t, 'b -> b f c h w', b=B, f=F, c=C, h=H, w=W) == 0), decoder_nll_no_mean, kl_no_mean).detach()
-        return {"output": output_mean, "output_no_mean": output_no_mean, "pred_xstart": out["pred_xstart"]}
+        output = th.where((t == 0), decoder_nll, kl)
+        return {"output": output, "pred_xstart": out["pred_xstart"]}
 
     def training_losses(self, model, x_start, t, model_kwargs=None, noise=None):
         """
@@ -918,103 +801,6 @@ class GaussianDiffusion:
             raise NotImplementedError(self.loss_type)
 
         return terms
-    
-    def diff_training_losses(self, model, x_start, t, model_kwargs=None, noise=None):
-        """
-        Compute training losses for a single timestep.
-        :param model: the model to evaluate loss on.
-        :param x_start: the [N x C x ...] tensor of inputs.
-        :param t: a batch of timestep indices.
-        :param model_kwargs: if not None, a dict of extra keyword arguments to
-            pass to the model. This can be used for conditioning.
-        :param noise: if specified, the specific Gaussian noise to try to remove.
-        :return: a dict with the key "loss" containing a tensor of shape [N].
-                 Some mean or variance settings may also have other keys.
-        """
-        if model_kwargs is None:
-            model_kwargs = {}
-        if noise is None:
-            noise = th.randn_like(x_start)
-        x_t = self.q_sample(x_start, t, noise=noise)
-
-        terms = {}
-
-        if self.loss_type == LossType.KL or self.loss_type == LossType.RESCALED_KL:
-            terms["loss"] = self._vb_terms_bpd(
-                model=model,
-                x_start=x_start,
-                x_t=x_t,
-                t=t,
-                clip_denoised=False,
-                model_kwargs=model_kwargs,
-            )["output"]
-            if self.loss_type == LossType.RESCALED_KL:
-                terms["loss"] *= self.num_timesteps
-        elif self.loss_type == LossType.MSE or self.loss_type == LossType.RESCALED_MSE:
-            model_output = model(x_t, t, **model_kwargs)
-
-            if self.model_var_type in [
-                ModelVarType.LEARNED,
-                ModelVarType.LEARNED_RANGE,
-            ]:
-                B, F, C = x_t.shape[:3]
-                assert model_output.shape == (B, F, C * 2, *x_t.shape[3:])
-                model_output, model_var_values = th.split(model_output, C, dim=2)
-                # Learn the variance using the variational bound, but don't let
-                # it affect our mean prediction.
-                frozen_out = th.cat([model_output.detach(), model_var_values], dim=2)
-
-                vb_term_outputs = self._vb_terms_bpd(
-                    model=lambda *args, r=frozen_out: r,
-                    x_start=x_start,
-                    x_t=x_t,
-                    t=t,
-                    clip_denoised=False,
-                )
-                terms["vb"] = vb_term_outputs["output"]
-                terms["vb_no_mean"] = vb_term_outputs["output_no_mean"]
-
-                if self.loss_type == LossType.RESCALED_MSE:
-                    # Divide by 1000 for equivalence with initial implementation.
-                    # Without a factor of 1/1000, the VB term hurts the MSE term.
-                    terms["vb"] *= self.num_timesteps / 1000.0
-                    terms["vb_no_mean"] *= self.num_timesteps / 1000.0
-
-            target = {
-                ModelMeanType.PREVIOUS_X:   self.q_posterior_mean_variance(x_start=x_start, x_t=x_t, t=t)[0],
-                ModelMeanType.START_X:      x_start,
-                ModelMeanType.EPSILON:      noise,
-            }[self.model_mean_type]
-
-            assert model_output.shape == target.shape == x_start.shape
-            terms["mse"] = mean_flat((target - model_output) ** 2)
-            terms["mse_no_mean"] = ((target - model_output) ** 2).detach()
-
-            if "vb" in terms:
-                terms["loss"] = terms["mse"] + terms["vb"]
-                terms["loss_no_mean"] = terms["mse_no_mean"] + terms["vb_no_mean"]
-            else:
-                terms["loss"] = terms["mse"]
-                terms["loss_no_mean"] = terms["mse_no_mean"]
-            
-            xs_model_output, direct_diff_model_output = uncombine_frames_and_difference(model_output)
-            indirect_diff_model_output = get_difference(xs_model_output)
-
-            xs_target, diff_target = uncombine_frames_and_difference(target)
-
-            terms['xs_mse'] = mean_flat((xs_target - xs_model_output) ** 2)
-            terms['direct_diff_mse'] = mean_flat((diff_target - direct_diff_model_output) ** 2)
-            terms['indirect_diff_mse'] = mean_flat((diff_target - indirect_diff_model_output) ** 2)
-
-            terms["xs_mse_no_mean"] = ((xs_target - xs_model_output) ** 2).detach()
-            terms["direct_diff_mse_no_mean"] = ((diff_target - direct_diff_model_output) ** 2).detach()
-            terms["indirect_diff_mse_no_mean"] = ((diff_target - indirect_diff_model_output) ** 2).detach()
-
-
-        else:
-            raise NotImplementedError(self.loss_type)
-
-        return terms
 
     def _prior_bpd(self, x_start):
         """
@@ -1087,7 +873,20 @@ class GaussianDiffusion:
             "mse": mse,
         }
 
-
+    def sample_init_noise(self, batch_size, n_frames, in_channel, latent_size, device, dtype=th.float32):
+        """
+        Sample the initial noise for the diffusion process.
+        :param batch_size: the number of samples to produce.
+        :param n_frames: the number of frames in each sample.
+        :param in_channel: the number of channels in each sample.
+        :param latent_size: the height and width of each sample.
+        :param device: the device to create the samples on.
+        :return: a batch of samples, of shape
+                 [batch_size, n_frames, in_channel, latent_size, latent_size].
+        """
+        return th.randn(
+            batch_size, 2*n_frames-1, in_channel, latent_size, latent_size, device=device, dtype=dtype
+        )
 
 def _extract_into_tensor(arr, timesteps, broadcast_shape):
     """

@@ -1,15 +1,15 @@
 # dataset
 dataset: "taichi"
 
-data_path: "/scratch/s224075134/temporal_diffusion/datasets/video/taichi/train"
-latent_path:
-load_latent: False
+data_path: null
+latent_path: "/scratch/s224075134/temporal_diffusion/datasets/video/taichi/train"
+load_latent: True
 
 vae: "./configs/vae/autoencoder_kl.yaml"
 
 # save and load
 results_dir: "./results"
-pretrained: /scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/results/taichi128/000-DiffLatte-M-2-F16S3-taichi128/checkpoints/0130000.pt
+pretrained: 
 
 # model config: 
 model: DiffLatte-M/2

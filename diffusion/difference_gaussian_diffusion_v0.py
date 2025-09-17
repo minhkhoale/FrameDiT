@@ -15,7 +15,7 @@ from .gaussian_diffusion import _extract_into_tensor, mean_flat, ModelMeanType, 
 from models.diff_utils import *
 
 
-class DifferenceGaussianDiffusion_v1:
+class DifferenceGaussianDiffusion_v0:
     """
     Utilities for training and sampling diffusion models.
     Original ported from this codebase:
@@ -75,7 +75,7 @@ class DifferenceGaussianDiffusion_v1:
     
     def __str__(self):
         return "" \
-        "DifferenceGaussianDiffusion_v1: \n" \
+        "DifferenceGaussianDiffusion_v0: \n" \
         f"  num_timesteps: {self.num_timesteps}\n" \
         f"  model_mean_type: {self.model_mean_type}\n" \
         f"  model_var_type: {self.model_var_type}\n" \
@@ -171,11 +171,6 @@ class DifferenceGaussianDiffusion_v1:
         if self.model_var_type in [ModelVarType.LEARNED, ModelVarType.LEARNED_RANGE]:
             assert model_output.shape == (B, F, C * 2, *x.shape[3:])
             model_output, model_var_values = th.split(model_output, C, dim=2)
-
-            frame_model_output, _ = uncombine_frames_and_difference(model_output)
-            diff_model_output = get_difference(frame_model_output) / np.sqrt(2)
-            model_output = combine_frames_and_difference(frame_model_output, diff_model_output)
-
             min_log = _extract_into_tensor(self.posterior_log_variance_clipped, t, x.shape)
             max_log = _extract_into_tensor(np.log(self.betas), t, x.shape)
             # The model_var_values is [-1, 1] for [min_var, max_var].
@@ -309,12 +304,7 @@ class DifferenceGaussianDiffusion_v1:
             model_kwargs=model_kwargs,
             tweedie_difference_mask=tweedie_difference_mask
         )
-        n_frames = int((x.shape[1] + 1) / 2)
-        frame_noise = th.randn_like(x[:, :n_frames])  # noise for frames
-        diff_noise = get_difference(frame_noise) / np.sqrt(2)
-        noise = combine_frames_and_difference(frame_noise, diff_noise)
-        # noise = th.randn_like(x)  # noise for frames + diff
-
+        noise = th.randn_like(x)
         nonzero_mask = (
             (t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
         )  # no noise when t == 0
@@ -612,13 +602,8 @@ class DifferenceGaussianDiffusion_v1:
         """
         if model_kwargs is None:
             model_kwargs = {}
-        
-        n_frames = int((x_start.shape[1] + 1) / 2)
         if noise is None:
-            x_noise = th.randn_like(x_start[:, :n_frames])  # noise for frames
-            diff_noise = get_difference(x_noise) / np.sqrt(2)
-            noise = combine_frames_and_difference(x_noise, diff_noise)
-
+            noise = th.randn_like(x_start)
         x_t = self.q_sample(x_start, t, noise=noise)
 
         terms = {}
@@ -771,9 +756,6 @@ class DifferenceGaussianDiffusion_v1:
         :return: a batch of samples, of shape
                  [batch_size, n_frames, in_channel, latent_size, latent_size].
         """
-        frame_noise = th.randn(
-            batch_size, n_frames, in_channel, latent_size, latent_size, device=device, dtype=dtype
+        return th.randn(
+            batch_size, 2*n_frames-1, in_channel, latent_size, latent_size, device=device, dtype=dtype
         )
-        diff_noise = get_difference(frame_noise) / np.sqrt(2)
-        noise = combine_frames_and_difference(frame_noise, diff_noise)
-        return noise

@@ -1,9 +1,9 @@
 # dataset
 dataset: "taichi"
 
-data_path: "/scratch/s224075134/temporal_diffusion/datasets/video/taichi/train"
-latent_path:
-load_latent: False
+data_path: null
+latent_path: "/scratch/s224075134/temporal_diffusion/datasets/video/taichi/train"
+load_latent: True
 
 vae: "./configs/vae/autoencoder_kl.yaml"
 
