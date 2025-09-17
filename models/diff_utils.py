@@ -5,6 +5,12 @@ from einops import rearrange
 def get_difference(frames):
     return frames[:, 1:] - frames[:, :-1]
 
+def get_mean(frames):
+    return (frames[:, 1:] + frames[:, :-1]) / 2
+
+def get_sum(frames):
+    return frames[:, 1:] + frames[:, :-1]
+
 def combine_frames_and_difference(frames, diff, combine_type='interleave'):
     assert diff.shape[1] == frames.shape[1] - 1, f"diff shape {diff.shape} must have one less time step than frames {frames.shape}"
     match combine_type:
@@ -24,3 +30,5 @@ def uncombine_frames_and_difference(x, combine_type='interleave'):
             return x[:,::2,...], x[:,1::2,...]
         case _:
             raise NotImplementedError(f"Unknown combine_type: {combine_type}")
+        
+
