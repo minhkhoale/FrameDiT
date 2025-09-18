@@ -15,4 +15,4 @@ source ~/.bashrc
 
 conda activate latte
 
-srun python my_train.py --config ./configs/taichi128/matlatte/taichi128_matlatte_train.yaml "$@"
+srun python my_train.py --config ./configs/taichi128/matlatte/taichi128_matlatte-64-64_train.yaml "$@"

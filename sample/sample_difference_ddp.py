@@ -88,7 +88,7 @@ def main(args):
     model.load_state_dict(state_dict)
     model.eval()  # important!
     diffusion = create_diffusion(
-        timestep_respacing=None,
+        timestep_respacing=str(args.num_sampling_steps),
         name=args.diffusion_name if hasattr(args, 'diffusion_name') else 'difference_gaussian_diffusion_v0',
         noise_schedule="linear",
         use_kl=False,
@@ -143,11 +143,12 @@ def main(args):
     pbar = range(iterations)
     pbar = tqdm(pbar) if rank == 0 else pbar
     total = n_existing_video
-    args.tweedie_difference_threshold = int(args.tweedie_difference_threshold*args.num_sampling_steps)
+    tweedie_difference_threshold = torch.tensor(int(args.tweedie_difference_threshold*args.num_sampling_steps), device=device) if args.tweedie_difference_threshold is not None else None
+    
     print('diffusion', diffusion)
     print("Num sampling steps:", args.num_sampling_steps)
     print("Sampling method:", args.sample_method)
-    print('Tweedie difference threshold:', args.tweedie_difference_threshold)
+    print('Tweedie difference threshold:', tweedie_difference_threshold)
     for _ in pbar:
         z = diffusion.sample_init_noise(n, args.num_frames, args.in_channels, latent_size, device, dtype=torch.float16 if args.use_fp16 else torch.float32)
         
@@ -165,11 +166,11 @@ def main(args):
 
         if args.sample_method == 'ddim':
             samples = diffusion.ddim_sample_loop(
-                sample_fn, z.shape, args.tweedie_difference_threshold, z, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device=device
+                sample_fn, z.shape, tweedie_difference_threshold, z, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device=device
             )
         elif args.sample_method == 'ddpm':
             samples = diffusion.p_sample_loop(
-                sample_fn, z.shape, args.tweedie_difference_threshold, z, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device=device
+                sample_fn, z.shape, tweedie_difference_threshold, z, clip_denoised=False, model_kwargs=model_kwargs, progress=False, device=device
             )
 
         if using_cfg:
