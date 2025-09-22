@@ -4,7 +4,7 @@
 #     IDDPM: https://github.com/openai/improved-diffusion/blob/main/improved_diffusion/gaussian_diffusion.py
 
 from . import gaussian_diffusion as gd
-from .respace import SpacedDiffusion, DifferenceSpacedDiffusion_v0, DifferenceSpacedDiffusion_v1, MeanSpacedDiffusion_v0, space_timesteps
+from .respace import SpacedDiffusion, DifferenceSpacedDiffusion_v0, DifferenceSpacedDiffusion_v1, MeanSpacedDiffusion_v0, SpatialDifferenceSpacedDiffusionV2, TemporalDifferenceSpacedDiffusionV2, space_timesteps
 
 
 
@@ -35,6 +35,8 @@ def create_diffusion(
         'difference_gaussian_diffusion_v0': DifferenceSpacedDiffusion_v0,
         'difference_gaussian_diffusion_v1': DifferenceSpacedDiffusion_v1,
         'mean_gaussian_diffusion_v0': MeanSpacedDiffusion_v0,
+        'spatial_difference_gaussian_diffusion_v2': SpatialDifferenceSpacedDiffusionV2,
+        'temporal_difference_gaussian_diffusion_v2': TemporalDifferenceSpacedDiffusionV2,
     }[name]
     return class_name(
         use_timesteps=space_timesteps(diffusion_steps, timestep_respacing),
