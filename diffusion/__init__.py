@@ -5,6 +5,7 @@
 
 from . import gaussian_diffusion as gd
 from .respace import SpacedDiffusion, DifferenceSpacedDiffusion_v0, DifferenceSpacedDiffusion_v1, MeanSpacedDiffusion_v0, SpatialDifferenceSpacedDiffusionV2, TemporalDifferenceSpacedDiffusionV2, space_timesteps
+from .respace_v2 import SpacedGaussianDiffusionV2
 
 
 
@@ -37,6 +38,8 @@ def create_diffusion(
         'mean_gaussian_diffusion_v0': MeanSpacedDiffusion_v0,
         'spatial_difference_gaussian_diffusion_v2': SpatialDifferenceSpacedDiffusionV2,
         'temporal_difference_gaussian_diffusion_v2': TemporalDifferenceSpacedDiffusionV2,
+
+        'gaussian_diffusion_v2': SpacedGaussianDiffusionV2,
     }[name]
     return class_name(
         use_timesteps=space_timesteps(diffusion_steps, timestep_respacing),

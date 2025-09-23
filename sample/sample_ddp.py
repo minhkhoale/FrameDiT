@@ -30,6 +30,7 @@ from omegaconf import OmegaConf
 from models import get_models
 from einops import rearrange
 from vae import get_vae, decode_video
+os.environ['TORCH_DISTRIBUTED_DEBUG'] = 'DETAIL'
 
 
 def create_npz_from_sample_folder(sample_dir, num=50_000):
@@ -61,7 +62,7 @@ def main(args):
     dist.init_process_group("nccl")
     rank = dist.get_rank()
     device = rank % torch.cuda.device_count()
-    if args.seed:
+    if args.seed is not None:
         seed = args.seed * dist.get_world_size() + rank
         torch.manual_seed(seed)
     torch.cuda.set_device(device)
@@ -88,6 +89,7 @@ def main(args):
     print('model', model)
     diffusion = create_diffusion(
         timestep_respacing=str(args.num_sampling_steps),
+        name=args.diffusion_name if hasattr(args, 'diffusion_name') else 'gaussian_diffusion',
         noise_schedule="linear",
         use_kl=False,
         sigma_small=args.sigma_small if 'sigma_small' in args else False,

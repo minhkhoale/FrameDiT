@@ -63,8 +63,9 @@ def main(args):
     dist.init_process_group("nccl")
     rank = dist.get_rank()
     device = rank % torch.cuda.device_count()
-    if args.seed:
+    if args.seed is not None:
         seed = args.seed * dist.get_world_size() + rank
+        print('seed', seed)
         torch.manual_seed(seed)
     torch.cuda.set_device(device)
     # print(f"Starting rank={rank}, seed={seed}, world_size={dist.get_world_size()}.")
