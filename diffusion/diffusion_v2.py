@@ -242,7 +242,7 @@ class BaseDiffusion:
             assert model_output.shape == (B, F, C * 2, *x_t.shape[3:])
             model_output, model_var_values = th.split(model_output, C, dim=2)
             min_log = _extract_into_tensor(self.q_posterior_log_variance_clipped, t, x_t.shape)
-            max_log = _extract_into_tensor(np.log(self.sigma**2), t, x_t.shape)
+            max_log = _extract_into_tensor(np.log(self.betas), t, x_t.shape)
 
             frac = (model_var_values + 1) / 2
             model_log_variance = frac * max_log + (1 - frac) * min_log
@@ -250,10 +250,6 @@ class BaseDiffusion:
         else:
             model_variance, model_log_variance = {
                 ModelVarType.FIXED_SMALL: (
-                    np.append(self.q_posterior_variance[1], self.sigma[1:]**2), 
-                    np.log(np.append(self.q_posterior_variance[1], self.sigma[1:]**2))
-                ),
-                ModelVarType.FIXED_LARGE: (
                     self.q_posterior_variance, 
                     self.q_posterior_log_variance_clipped
                 ),
@@ -294,7 +290,7 @@ class BaseDiffusion:
         self,
         model,
         x_t: th.Tensor,
-        t: th.Tensor,                      # LongTensor [B], current t
+        t: th.Tensor, # LongTensor [B], current t
         *,
         clip_denoised: bool = True,
         denoised_fn = None,
@@ -313,7 +309,6 @@ class BaseDiffusion:
         """
         if model_kwargs is None:
             model_kwargs = {}
-        B = x_t.shape[0]
 
         out = self.p_mean_variance(
             model,
@@ -342,7 +337,7 @@ class BaseDiffusion:
         a_tm1 = self.a_tm1(t, x_t.shape)
         sigma_t = self.sigma_t(t, x_t.shape)
         sigma_tm1 = self.sigma_tm1(t, x_t.shape)
-        mean = a_tm1 / a_t * x_t + (th.sqrt(sigma_tm1**2 - omega**2) - a_tm1 / a_t * sigma_t) * eps
+        mean = a_tm1 / a_t * x_t + (th.sqrt(th.clamp(sigma_tm1**2 - omega**2, min=0.0)) - a_tm1 / a_t * sigma_t) * eps
 
         noise = th.randn_like(x_t)
         nonzero = (t != 0).float().view(-1, *([1] * (x_t.ndim - 1)))
@@ -408,7 +403,6 @@ class BaseDiffusion:
         else:
             img = th.randn(*shape, device=device)
         indices = list(range(self.num_timesteps))[::-1]
-
         if progress:
             # Lazy import so that we don't depend on tqdm.
             from tqdm.auto import tqdm
@@ -431,7 +425,7 @@ class BaseDiffusion:
                 yield out
                 img = out["sample"]
         
-    def ddpm_sample_loop(
+    def p_sample_loop(
         self,
         model,
         shape,
