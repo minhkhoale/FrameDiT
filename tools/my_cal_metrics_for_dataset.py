@@ -39,6 +39,7 @@ def cal_metrics(
         num_frames=16,
         realdata_subsample_factor=6,
         gendata_subsample_factor=1,
+        result_file=None,
     ):
     dnnlib.util.Logger(should_flush=True)
     args = dnnlib.EasyDict(metrics=metrics, verbose=verbose)
@@ -57,7 +58,6 @@ def cal_metrics(
     dataset_cfg = OmegaConf.create({'max_num_frames': 10000})
 
     class_name = 'tools.utils.dataset.VideoDataset' if check_if_video_folder(real_data_path) else 'tools.utils.dataset.VideoFramesFolderDataset'
-    print(f'Using {class_name.split('.')[-1]} to load real videos from {real_data_path}')
     args.dataset_kwargs = dnnlib.EasyDict(
         class_name=class_name,
         path=real_data_path,
@@ -70,7 +70,6 @@ def cal_metrics(
         use_labels=False,
     )
     class_name = 'tools.utils.dataset.VideoDataset' if check_if_video_folder(fake_data_path) else 'tools.utils.dataset.VideoFramesFolderDataset'
-    print(f'Using {class_name.split('.')[-1]} to load fake videos from {fake_data_path}')
     args.gen_dataset_kwargs = dnnlib.EasyDict(
         class_name=class_name,
         path=fake_data_path,
@@ -91,11 +90,6 @@ def cal_metrics(
 
         print('Fake data options:')
         print(args.gen_dataset_kwargs)
-
-    print('*' * 50 + 'parting line' + '*' * 50)
-    print('Fake data options:')
-    print(args.gen_dataset_kwargs)
-
 
     real_dataset = dnnlib.util.construct_class_by_name(**args.dataset_kwargs)  # subclass of torch.utils.data.Dataset
     fake_dataset = dnnlib.util.construct_class_by_name(**args.gen_dataset_kwargs)
@@ -132,6 +126,11 @@ def cal_metrics(
         print(f"{k:<{max_key_len}} : {finals[k]:.6f}")
 
     pprint(finals)
+    if result_file is not None:
+        import json
+        with open(result_file, 'w') as f:
+            json.dump(finals, f, indent=4)
+        print(f'Saved results to {result_file}')
 
 if __name__ == "__main__":
     import argparse
@@ -142,10 +141,11 @@ if __name__ == "__main__":
     parser.add_argument('--mirror', action='store_true', help='Whether to apply x-flip augmentation')
     parser.add_argument('--resolution', type=int, default=256, help='Resolution of the videos')
     parser.add_argument('--verbose', action='store_true', help='Whether to print out more information')
+    parser.add_argument('--result_file', type=str, help='Path to save the results')
     args = parser.parse_args()
 
     metrics = ['vbench', 'fvd', 'is', 'fid', 'lpips', 'mse', 'ssim', 'psnr']
-    cal_metrics(metrics=metrics, real_data_path=args.real_data_path, fake_data_path=args.fake_data_path, mirror=args.mirror, resolution=args.resolution, verbose=args.verbose)
+    cal_metrics(metrics=metrics, real_data_path=args.real_data_path, fake_data_path=args.fake_data_path, mirror=args.mirror, resolution=args.resolution, verbose=args.verbose, result_file=args.result_file)
 
 
        
