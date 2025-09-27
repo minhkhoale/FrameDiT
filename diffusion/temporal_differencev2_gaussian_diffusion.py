@@ -207,10 +207,12 @@ class TemporalDifferenceGaussianDiffusionV2:
             )
         if tweedie_difference_threshold is not None:
             tweedie_difference_mask = t<=tweedie_difference_threshold
-            original_pred_xstart = pred_xstart.clone()
-            pred_frame_start, _ = uncombine_tensors(pred_xstart)
-            td_pred_diff_start = get_difference(pred_frame_start)
-            td_pred_xstart = combine_tensors(pred_frame_start, td_pred_diff_start)
+            print('tweedie_difference_mask', tweedie_difference_mask)
+            pred_frame_start, td_pred_diff_start = uninterleave_frames(pred_xstart)
+            td_pred_diff_start = get_difference(pred_frame_start, padding=True)*4.0
+
+            # td_pred_diff_start = torch.where(td_pred_diff_start.abs() > 0.0, td_pred_diff_start*3.25012, td_pred_diff_start)
+            td_pred_xstart = interleave_frames(pred_frame_start, td_pred_diff_start)
             pred_xstart = th.where(tweedie_difference_mask[:, None, None, None, None], td_pred_xstart, pred_xstart)
 
         model_mean, _, _ = self.q_posterior_mean_variance(x_start=pred_xstart, x_t=x, t=t)
@@ -273,11 +275,7 @@ class TemporalDifferenceGaussianDiffusionV2:
             model_kwargs=model_kwargs,
             tweedie_difference_threshold=tweedie_difference_threshold
         )
-        n_frames = int((x.shape[1] + 1) / 2)
-        frame_noise = th.randn_like(x[:, :n_frames])  # noise for frames
-        diff_noise = get_difference(frame_noise) / np.sqrt(2)
-        #noise = combine_frames_and_difference(frame_noise, diff_noise)
-        # noise = th.randn_like(x)  # noise for frames + diff
+        noise = th.randn_like(x)  # noise for frames + diff
 
         nonzero_mask = (
             (t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
@@ -725,7 +723,7 @@ class TemporalDifferenceGaussianDiffusionV2:
             "mse": mse,
         }
 
-    def sample_init_noise(self, batch_size, n_frames, in_channel, latent_size, device, dtype=th.float32):
+    def sample_init_noise(self, shape, device, dtype=th.float32):
         """
         Sample the initial noise for the diffusion process.
         :param batch_size: the number of samples to produce.
@@ -736,9 +734,6 @@ class TemporalDifferenceGaussianDiffusionV2:
         :return: a batch of samples, of shape
                  [batch_size, n_frames, in_channel, latent_size, latent_size].
         """
-        frame_noise = th.randn(
-            batch_size, n_frames, in_channel, latent_size, latent_size, device=device, dtype=dtype
-        )
-        diff_noise = get_difference(frame_noise) / np.sqrt(2)
-        noise = combine_tensors(frame_noise, diff_noise)
-        return noise
+        shape = list(shape)
+        shape[1] = shape[1] * 2  # adjust for frames + diff
+        return th.randn(*shape, device=device, dtype=dtype)

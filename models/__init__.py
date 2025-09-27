@@ -9,6 +9,7 @@ from .mat_latte import MatLatte_models
 from .mat_lattev2 import MatLatteV2_models
 from .dit3d import DiT3D_models
 from .diff_latte import DiffLatte_models
+from .diff_lattev2 import DiffLatteV2_models
 from .latte_v2 import LatteV2_models
 from .spatial_diff_lattev2 import SpatialDiffLatteV2_models
 from .temporal_diff_lattev2 import TemporalDiffLatteV2_models
@@ -42,6 +43,7 @@ def get_models(args):
         'LatteV2': LatteV2_models,
         'DiT3D': DiT3D_models,
         'DiffLatte': DiffLatte_models,
+        'DiffLatteV2': DiffLatteV2_models,
         'SpatialDiffLatteV2': SpatialDiffLatteV2_models,
         'TemporalDiffLatteV2': TemporalDiffLatteV2_models,
         'MatLatte': MatLatte_models,

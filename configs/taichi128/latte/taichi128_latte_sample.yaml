@@ -15,14 +15,15 @@ learn_sigma: True
 extras: 1 # [1, 2] 1 unconditional generation, 2 class-conditional generation
 num_classes:
 
+diffusion_name: 'gaussian_diffusion_v2' # 'gaussian_diffusion' or 'gaussian_diffusion_v2'
 # model speedup
 use_compile: False
 use_fp16: False
 
 # sample config:
-seed:
-sample_method: 'ddpm'
-num_sampling_steps: 250
+seed: 0
+sample_method: 'ddim'
+num_sampling_steps: 25
 cfg_scale: 1.0
 negative_name:
 
@@ -34,5 +35,5 @@ fps: 8
 video_quality: 9
 
 # ddp sample config
-per_proc_batch_size: 8
-num_fvd_samples: 2048
+per_proc_batch_size: 1
+num_fvd_samples: 1

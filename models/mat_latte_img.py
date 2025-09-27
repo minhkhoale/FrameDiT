@@ -11,10 +11,9 @@ import math
 import torch
 import torch.nn as nn
 import numpy as np
-
+from typing import Tuple, Optional
 from einops import rearrange, repeat
 from timm.models.vision_transformer import Mlp, PatchEmbed
-from .diff_utils import *
 
 # the xformers lib allows less memory, faster training and inference
 try:
@@ -28,6 +27,15 @@ except:
 
 def modulate(x, shift, scale):
     return x * (1 + scale) + shift
+
+def matrix_mul(x, u, w):
+    return torch.einsum('nm,...nd,dk->...mk', u, x, w)
+
+def matrix_mul_softmax(x, u, w):
+    return torch.einsum('nm,...nd,dk->...mk', torch.nn.functional.softmax(u, dim=0), x, w)
+
+def matrix_mul_one_side(x, w):
+    return torch.einsum('...nd,dk->...nk', x, w)
 
 #################################################################################
 #               Attention Layers from TIMM                                      #
@@ -50,7 +58,6 @@ class Attention(nn.Module):
         B, N, C = x.shape
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4).contiguous()
         q, k, v = qkv.unbind(0)   # make torchscript happy (cannot use tensor as tuple)
-        
         if self.attention_mode == 'xformers': # cause loss nan while using with amp
             # https://github.com/facebookresearch/xformers/blob/e8bd8f932c2f48e3a3171d06749eecbbf1de420c/xformers/ops/fmha/__init__.py#L135
             q_xf = q.transpose(1,2).contiguous()
@@ -69,12 +76,148 @@ class Attention(nn.Module):
             attn = attn.softmax(dim=-1)
             attn = self.attn_drop(attn)
             x = (attn @ v).transpose(1, 2).reshape(B, N, C)
-
         else:
             raise NotImplemented
 
         x = self.proj(x)
         x = self.proj_drop(x)
+        return x
+
+
+class MatrixLinear(nn.Module):
+    def __init__(
+        self,
+        in_features: Tuple[int, int],
+        out_features: Tuple[int, int],
+        bias=True,
+        device=None,
+        dtype=None,
+    ):
+        factory_kwargs = {"device": device, "dtype": dtype}
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+
+        # self.u = nn.Parameter(torch.eye(in_features[0], device='cuda:0'))
+        # self.u = torch.eye(in_features[0], device='cuda:0')
+        self.u = nn.Parameter(torch.empty((in_features[0], out_features[0]), **factory_kwargs))
+        self.w = nn.Parameter(torch.empty((in_features[1], out_features[1]), **factory_kwargs))
+
+        # self.u_norm = nn.LayerNorm(in_features[0], elementwise_affine=False, eps=1e-6)
+        if bias:
+            self.bias = nn.Parameter(torch.empty(out_features, **factory_kwargs))
+        else:
+            self.register_parameter("bias", None)
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        x = matrix_mul(input, self.u, self.w)
+        # x = matrix_mul_one_side(input, self.w)
+        
+        if self.bias is not None:
+            x += self.bias
+        return x
+    
+    def __repr__(self):
+        return f"MatrixLinear(in_features={self.in_features}, out_features={self.out_features}), bias={self.bias is not None})"
+
+
+class MatrixAttention(nn.Module):
+    """
+    Matrix attention block.
+    This is a simplified version of the attention block that does not use RoPE.
+    It is used in the DiT model for the final layer.
+    """
+    def __init__(
+        self, 
+        col_dim: int,
+        row_dim: int,
+        qk_col_dim: Optional[int] = None,
+        v_col_dim: Optional[int] = None,
+        num_col_heads: int = 4,
+        num_row_heads: int = 4,
+        attn_drop: float = 0.0,
+        proj_drop: float = 0.0,
+        use_bias=True,
+        attention_mode='math'
+    ):
+        super().__init__()
+        assert qk_col_dim % num_col_heads == 0, "qk_col_dim must be divisible by num_col_heads"
+        assert v_col_dim % num_col_heads == 0, "v_col_dim must be divisible by num_col_heads"
+        assert row_dim % num_row_heads == 0, "row_dim must be divisible by num_row_heads"
+
+
+        self.col_dim = col_dim
+        self.row_dim = row_dim
+
+        self.qk_col_dim = qk_col_dim
+        self.v_col_dim = v_col_dim
+
+        self.num_col_heads = num_col_heads
+        self.num_row_heads = num_row_heads
+        self.num_heads = num_col_heads * num_row_heads
+        self.use_bias = use_bias
+
+        self.head_row_dim = row_dim // num_row_heads
+        self.qk_head_col_dim = self.qk_col_dim // num_col_heads
+        self.v_head_col_dim = self.v_col_dim // num_col_heads
+
+        self.linear_q = MatrixLinear((self.col_dim, self.row_dim), (self.qk_col_dim, self.row_dim), bias=self.use_bias)
+        self.linear_k = MatrixLinear((self.col_dim, self.row_dim), (self.qk_col_dim, self.row_dim), bias=self.use_bias)
+        self.linear_v = MatrixLinear((self.col_dim, self.row_dim), (self.v_col_dim, self.row_dim), bias=self.use_bias)
+
+        self.proj_v = MatrixLinear((self.v_col_dim, self.row_dim), (self.col_dim, self.row_dim), bias=self.use_bias)
+
+        self.scale = (self.qk_head_col_dim*self.head_row_dim)**-0.5
+
+        self.attn_drop = nn.Dropout(attn_drop)
+        self.proj_drop = nn.Dropout(proj_drop)
+
+        self.attention_mode = attention_mode
+
+    def forward(
+        self, 
+        x: torch.Tensor, 
+        timestep=None,
+        height: int = None,
+        width: int = None
+    ) -> torch.Tensor:
+        if hasattr(self, "store_attn_map"):
+            raise NotImplementedError("MatrixAttention does not support storing attention maps.")
+
+        # B: batch_size
+        # T: n_frames
+        # N: n_tokens per frame
+        # D: dim of a token
+        B, T, N, D = x.shape
+
+        q = self.linear_q(x)  # B, T, qk, row_dim
+        k = self.linear_k(x)  # B, T, N, row_dim
+        v = self.linear_v(x)  # B, T, N, row_dim
+
+        # Rearrange
+        q = rearrange(q, 'B T (C N) (R D) -> B (C R) T (N D)', B=B, T=T, C=self.num_col_heads, R=self.num_row_heads, N=self.qk_head_col_dim, D=self.head_row_dim)
+        k = rearrange(k, 'B T (C N) (R D) -> B (C R) T (N D)', B=B, T=T, C=self.num_col_heads, R=self.num_row_heads, N=self.qk_head_col_dim, D=self.head_row_dim)
+        v = rearrange(v, 'B T (C N) (R D) -> B (C R) T (N D)', B=B, T=T, C=self.num_col_heads, R=self.num_row_heads, N=self.v_head_col_dim, D=self.head_row_dim)
+
+        if self.attention_mode == 'xformers':
+           raise NotImplementedError("MatrixAttention does not support xformers attention mode.")
+        elif self.attention_mode == 'flash':
+            # cause loss nan while using with amp
+            # Optionally use the context manager to ensure one of the fused kerenels is run
+            with torch.backends.cuda.sdp_kernel(enable_math=False):
+                x = torch.nn.functional.scaled_dot_product_attention(q, k, v).reshape(B, T, N*D) # (B, col_num_head * row_num_head, num_tokens, N*D)
+        elif self.attention_mode == 'math':
+            attn = (q @ k.transpose(-2, -1)) * self.scale  # (B, col_num_head * row_num_head, T, T)
+            attn = attn.softmax(dim=-1)
+            attn = self.attn_drop(attn)
+            x = (attn @ v) # B, col_num_head * row_num_head, T, N*D
+            x = rearrange(x, 'B (C R) T (N D) -> B T (C N) (R D)', C=self.num_col_heads, R=self.num_row_heads, N=self.v_head_col_dim, D=self.head_row_dim)
+        else:
+            raise NotImplementedError(f"Unknown attention mode: {self.attention_mode}")
+
+        x = self.proj_v(x)
+        x = self.proj_drop(x)
+
         return x
 
 
@@ -155,12 +298,12 @@ class LabelEmbedder(nn.Module):
 
 
 #################################################################################
-#                                 Core DiffLatte Model                                #
+#                                 Core MatLatte Model                                #
 #################################################################################
 
 class TransformerBlock(nn.Module):
     """
-    A DiffLatte tansformer block with adaptive layer norm zero (adaLN-Zero) conditioning.
+    A MatLatte tansformer block with adaptive layer norm zero (adaLN-Zero) conditioning.
     """
     def __init__(self, hidden_size, num_heads, mlp_ratio=4.0, **block_kwargs):
         super().__init__()
@@ -180,11 +323,56 @@ class TransformerBlock(nn.Module):
         x = x + gate_msa * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
         x = x + gate_mlp * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
         return x
+    
+
+class MatrixTransformerBlock(nn.Module):
+    def __init__(
+        self,
+        hidden_size: int, 
+        col_dim: int, 
+        qk_col_dim: int, 
+        v_col_dim: int,
+        num_col_heads: int, 
+        num_row_heads: int,
+        mlp_ratio=4.0, 
+        **block_kwargs
+    ):
+        super().__init__()
+        self.col_dim = col_dim
+        self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        self.attn = MatrixAttention(
+            row_dim=hidden_size,
+            col_dim=col_dim,
+            qk_col_dim=qk_col_dim,
+            v_col_dim=v_col_dim,
+            num_col_heads=num_col_heads,
+            num_row_heads=num_row_heads,
+            **block_kwargs
+        )
+        self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
+        mlp_hidden_dim = int(hidden_size * mlp_ratio)
+        approx_gelu = lambda: nn.GELU(approximate="tanh")
+        self.mlp = Mlp(in_features=hidden_size, hidden_features=mlp_hidden_dim, act_layer=approx_gelu, drop=0)
+        self.adaLN_modulation = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(hidden_size, 6 * hidden_size, bias=True)
+        )
+
+    def forward(self, x, c):
+        """
+        x: (B*N, F, D)
+        c: (B*N, F, D)
+        """
+        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=-1)
+        attn_x = self.attn(rearrange(modulate(self.norm1(x), shift_msa, scale_msa), '(b n) f d -> b f n d', n=self.col_dim))
+        x = x + gate_msa * rearrange(attn_x, 'b f n d -> (b n) f d')
+        x = x + gate_mlp * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
+        return x
 
 
 class FinalLayer(nn.Module):
     """
-    The final layer of DiffLatte.
+    The final layer of MatLatte.
     """
     def __init__(self, hidden_size, patch_size, out_channels):
         super().__init__()
@@ -202,7 +390,7 @@ class FinalLayer(nn.Module):
         return x
 
 
-class SpatialDiffLatteV2(nn.Module):
+class MatLatte(nn.Module):
     """
     Diffusion model with a Transformer backbone.
     """
@@ -212,8 +400,11 @@ class SpatialDiffLatteV2(nn.Module):
         patch_size=2,
         in_channels=4,
         hidden_size=1152,
+        qk_col_dim=64,
+        v_col_dim=64,
         depth=28,
-        num_heads=16,
+        num_col_heads=16,
+        num_row_heads=16,
         mlp_ratio=4.0,
         num_frames=16,
         class_dropout_prob=0.1,
@@ -227,16 +418,14 @@ class SpatialDiffLatteV2(nn.Module):
         self.in_channels = in_channels
         self.out_channels = in_channels * 2 if learn_sigma else in_channels
         self.patch_size = patch_size
-        self.num_heads = num_heads
+        self.n_tokens_per_frames = (input_size // patch_size) ** 2
+        self.num_col_heads = num_col_heads
+        self.num_row_heads = num_row_heads
         self.extras = extras
-
         self.num_frames = num_frames
-        self.num_diff = num_frames
 
         self.x_embedder = PatchEmbed(input_size, patch_size, in_channels, hidden_size, bias=True)
         self.t_embedder = TimestepEmbedder(hidden_size)
-        self.token_type = nn.Embedding(2, hidden_size) # frame or frame difference
-        self.dx_proj = nn.Linear(hidden_size, hidden_size)
 
         if self.extras == 2:
             self.y_embedder = LabelEmbedder(num_classes, hidden_size, class_dropout_prob)
@@ -248,12 +437,22 @@ class SpatialDiffLatteV2(nn.Module):
 
         num_patches = self.x_embedder.num_patches
         # Will use fixed sin-cos embedding:
-        self.spatial_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size), requires_grad=False)
-        self.temp_embed = nn.Parameter(torch.zeros(1, self.num_frames, hidden_size), requires_grad=False)
+        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size), requires_grad=False)
+        self.temp_embed = nn.Parameter(torch.zeros(1, num_frames, hidden_size), requires_grad=False)
         self.hidden_size =  hidden_size
 
+        _transformer_block = lambda: TransformerBlock(hidden_size, num_row_heads, mlp_ratio=mlp_ratio, attention_mode=attention_mode)
+        _mat_block = lambda: MatrixTransformerBlock(
+            hidden_size=hidden_size,
+            col_dim=self.n_tokens_per_frames, 
+            qk_col_dim=qk_col_dim,
+            v_col_dim=v_col_dim,
+            num_col_heads=num_col_heads,
+            num_row_heads=num_row_heads
+        )
+
         self.blocks = nn.ModuleList([
-            TransformerBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio, attention_mode=attention_mode) for _ in range(depth)
+            _transformer_block() if i % 2 == 0 else _mat_block() for i in range(depth)
         ])
 
         self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
@@ -266,11 +465,18 @@ class SpatialDiffLatteV2(nn.Module):
                 torch.nn.init.xavier_uniform_(module.weight)
                 if module.bias is not None:
                     nn.init.constant_(module.bias, 0)
+            elif isinstance(module, MatrixLinear):
+                if isinstance(module.u, nn.Parameter):
+                    torch.nn.init.xavier_uniform_(module.u)
+                torch.nn.init.xavier_uniform_(module.w)
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0)
+
         self.apply(_basic_init)
 
         # Initialize (and freeze) pos_embed by sin-cos embedding:
-        pos_embed = get_2d_sincos_pos_embed(self.spatial_embed.shape[-1], int(self.x_embedder.num_patches ** 0.5))
-        self.spatial_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
+        pos_embed = get_2d_sincos_pos_embed(self.pos_embed.shape[-1], int(self.x_embedder.num_patches ** 0.5))
+        self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
 
         temp_embed = get_1d_sincos_temp_embed(self.temp_embed.shape[-1], self.temp_embed.shape[-2])
         self.temp_embed.data.copy_(torch.from_numpy(temp_embed).float().unsqueeze(0))
@@ -279,7 +485,6 @@ class SpatialDiffLatteV2(nn.Module):
         w = self.x_embedder.proj.weight.data
         nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
         nn.init.constant_(self.x_embedder.proj.bias, 0)
-        nn.init.normal_(self.token_type.weight, std=0.02)
 
         if self.extras == 2:
             # Initialize label embedding table:
@@ -289,7 +494,7 @@ class SpatialDiffLatteV2(nn.Module):
         nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
         nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
 
-        # Zero-out adaLN modulation layers in DiffLatte blocks:
+        # Zero-out adaLN modulation layers in MatLatte blocks:
         for block in self.blocks:
             nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
             nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
@@ -318,86 +523,73 @@ class SpatialDiffLatteV2(nn.Module):
     # @torch.cuda.amp.autocast()
     # @torch.compile
     def forward(self, 
-                x,
+                x, 
                 t, 
                 y=None, 
                 text_embedding=None, 
                 use_fp16=False):
         """
-        Forward pass of DiffLatte.
+        Forward pass of MatLatte.
         x: (N, F, C, H, W) tensor of video inputs
-        dx: (N, F, C, H, W) tensor of difference video inputs
         t: (N,) tensor of diffusion timesteps
         y: (N,) tensor of class labels
         """
         if use_fp16:
             x = x.to(dtype=torch.float16)
 
-        x, dx = uncombine_frames_and_difference(x, combine_type='token_interleave') # B, F, C, H, W ; B, F, C, H, W
-
-        batches, frames, channels, height, width = x.shape 
+        batches, frames, channels, high, weight = x.shape 
         x = rearrange(x, 'b f c h w -> (b f) c h w')
-        dx = rearrange(dx, 'b f c h w -> (b f) c h w')
-
-        # patchify
-        x = self.x_embedder(x) + self.spatial_embed
-        x_tokens = x.shape[1]
-        dx = self.dx_proj(self.x_embedder(dx)) + self.spatial_embed
-        dx_tokens = dx.shape[1]
-        total_tokens = x_tokens + dx_tokens
-
-        # stack interleave
-        x = combine_frames_and_difference(x, dx, combine_type='token_interleave') # B*F, N*2, D
-        # noise time embedding
-        t = self.t_embedder(t, use_fp16=use_fp16)
-        timestep_spatial = repeat(t, 'b d -> (b f) n d', n=total_tokens, f=frames) 
-        timestep_temp = repeat(t, 'b d -> (b n) f d', n=total_tokens, f=frames)
+        x = self.x_embedder(x) + self.pos_embed  
+        t = self.t_embedder(t, use_fp16=use_fp16)                  
+        timestep_spatial = repeat(t, 'b d -> (b f) n d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1]) 
+        timestep_temp = repeat(t, 'b d -> (b n) f d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1])
 
         if self.extras == 2:
             y = self.y_embedder(y, self.training)
-            y_spatial = repeat(y, 'b d -> (b f) n d', n=total_tokens, f=frames)
-            y_temp = repeat(y, 'b d -> (b n) f d', n=total_tokens, f=frames)
+            y_spatial = repeat(y, 'b d -> (b f) n d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1])
+            y_temp = repeat(y, 'b d -> (b n) f d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1])
         elif self.extras == 78:
             text_embedding = self.text_embedding_projection(text_embedding.reshape(batches, -1))
-            y_spatial = repeat(text_embedding, 'b d -> (b f) n d', n=total_tokens, f=frames)
-            y_temp = repeat(text_embedding, 'b d -> (b n) f d', n=total_tokens, f=frames)
-        else:
-            y_spatial, y_temp = 0, 0
-        
-        # token type embedding
-        type_ids = torch.arange(total_tokens, device=x.device) % 2
-        type_emb = self.token_type(type_ids) # N*2, D
-        type_emb_spatial = repeat(type_emb, 'n d -> (b f) n d', b=batches, f=frames)
-        type_emb_temp = repeat(type_emb, 'n d -> (b n) f d', b=batches, f=frames)
-        
-        spatial_c = timestep_spatial + type_emb_spatial + y_spatial
-        temp_c = timestep_temp + type_emb_temp + y_temp
+            text_embedding_spatial = repeat(text_embedding, 'b d -> (b f) n d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1])
+            text_embedding_temp = repeat(text_embedding, 'b d -> (b n) f d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1])
 
         for i in range(0, len(self.blocks), 2):
             spatial_block, temp_block = self.blocks[i:i+2]
-            x  = spatial_block(x, spatial_c)
-            x = rearrange(x, '(b f) t d -> (b t) f d', b=batches)
+            if self.extras == 2:
+                c = timestep_spatial + y_spatial
+            elif self.extras == 78:
+                c = timestep_spatial + text_embedding_spatial
+            else:
+                c = timestep_spatial
+            x  = spatial_block(x, c)
+
+            x = rearrange(x, '(b f) n d -> (b n) f d', b=batches)
             # Add Time Embedding
             if i == 0:
                 x = x + self.temp_embed
 
-            x = temp_block(x, temp_c)
-            x = rearrange(x, '(b t) f d -> (b f) t d', b=batches)
+            if self.extras == 2:
+                c = timestep_temp + y_temp
+            elif self.extras == 78:
+                c = timestep_temp + text_embedding_temp
+            else:
+                c = timestep_temp
 
-        x = self.final_layer(x, spatial_c)               
+            x = temp_block(x, c)
+            x = rearrange(x, '(b n) f d -> (b f) n d', b=batches)
 
-        x, dx = uncombine_frames_and_difference(x, combine_type='token_interleave') # B*F, N, D ; B*F, N, D
-        x = self.unpatchify(x)
-        dx = self.unpatchify(dx)
-
-        x = combine_frames_and_difference(x, dx, combine_type='token_interleave') # B, F, C, H, W
+        if self.extras == 2:
+            c = timestep_spatial + y_spatial
+        else:
+            c = timestep_spatial
+        x = self.final_layer(x, c)               
+        x = self.unpatchify(x)                  
         x = rearrange(x, '(b f) c h w -> b f c h w', b=batches)
-
         return x
 
     def forward_with_cfg(self, x, t, y=None, cfg_scale=7.0, use_fp16=False, text_embedding=None):
         """
-        Forward pass of DiffLatte, but also batches the unconditional forward pass for classifier-free guidance.
+        Forward pass of MatLatte, but also batches the unconditional forward pass for classifier-free guidance.
         """
         # https://github.com/openai/glide-text2im/blob/main/notebooks/text2im.ipynb
         half = x[: len(x) // 2]
@@ -477,61 +669,130 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
 
 
 #################################################################################
-#                                   DiffLatte Configs                                  #
+#                                   MatLatte Configs                                  #
 #################################################################################
+# def MatLatte_XL_64_128_2(**kwargs):
+#     return MatLatte(depth=28, hidden_size=1152, patch_size=2, qk_col_dim=64, v_col_dim=128, num_col_heads=64, num_row_heads=16, **kwargs)
 
-def SpatialDiffLatteV2_XL_2(**kwargs):
-    return SpatialDiffLatteV2(depth=28, hidden_size=1152, patch_size=2, num_heads=16, **kwargs)
+# def MatLatte_XL_64_128_2(**kwargs):
+#     return MatLatte(depth=28, hidden_size=1152, patch_size=2, qk_col_dim=64, v_col_dim=128, num_col_heads=64, num_row_heads=16, **kwargs)
 
-def SpatialDiffLatteV2_XL_4(**kwargs):
-    return SpatialDiffLatteV2(depth=28, hidden_size=1152, patch_size=4, num_heads=16, **kwargs)
+# def MatLatte_XL_256_256_2(**kwargs):
+#     return MatLatte(depth=28, hidden_size=1152, patch_size=2, qk_col_dim=256, v_col_dim=256, num_col_heads=64, num_row_heads=16, **kwargs)
+#
 
-def SpatialDiffLatteV2_XL_8(**kwargs):
-    return SpatialDiffLatteV2(depth=28, hidden_size=1152, patch_size=8, num_heads=16, **kwargs)
+# n_tokens_per_frame = (image_size/8/patch_size) ** 2
+# image_size | patch_size | n_tokens_per_frame
+# 64         | 2          | 16
+# 64         | 4          | 4
+# 64         | 8          | 1
+# 128        | 2          | 64
+# 128        | 4          | 16
+# 128        | 8          | 4
+# 256        | 2          | 256
+# 256        | 4          | 64
+# 256        | 8          | 16
 
-def SpatialDiffLatteV2_L_2(**kwargs):
-    return SpatialDiffLatteV2(depth=24, hidden_size=1024, patch_size=2, num_heads=16, **kwargs)
+#============================================================================================
+def MatLatte_XL_2(**kwargs):
+    return MatLatte(depth=28, hidden_size=1152, patch_size=2, num_row_heads=16, **kwargs)
 
-def SpatialDiffLatteV2_L_4(**kwargs):
-    return SpatialDiffLatteV2(depth=24, hidden_size=1024, patch_size=4, num_heads=16, **kwargs)
+def MatLatte_XL_4(**kwargs):
+    return MatLatte(depth=28, hidden_size=1152, patch_size=4, num_row_heads=16, **kwargs)
 
-def SpatialDiffLatteV2_L_8(**kwargs):
-    return SpatialDiffLatteV2(depth=24, hidden_size=1024, patch_size=8, num_heads=16, **kwargs)
+def MatLatte_XL_8(**kwargs):
+    return MatLatte(depth=28, hidden_size=1152, patch_size=8, num_row_heads=16, **kwargs)
 
-def SpatialDiffLatteV2_M_2(**kwargs):
-    return SpatialDiffLatteV2(depth=12, hidden_size=1024, patch_size=2, num_heads=16, **kwargs)
+def MatLatte_L_2(**kwargs):
+    return MatLatte(depth=24, hidden_size=1024, patch_size=2, num_row_heads=16, **kwargs)
 
-def SpatialDiffLatteV2_M_4(**kwargs):
-    return SpatialDiffLatteV2(depth=12, hidden_size=1024, patch_size=4, num_heads=16, **kwargs)
+def MatLatte_L_4(**kwargs):
+    return MatLatte(depth=24, hidden_size=1024, patch_size=4, num_row_heads=16, **kwargs)
 
-def SpatialDiffLatteV2_M_8(**kwargs):
-    return SpatialDiffLatteV2(depth=12, hidden_size=1024, patch_size=8, num_heads=16, **kwargs)
+def MatLatte_L_8(**kwargs):
+    return MatLatte(depth=24, hidden_size=1024, patch_size=8, num_row_heads=16, **kwargs)
 
-def SpatialDiffLatteV2_B_2(**kwargs):
-    return SpatialDiffLatteV2(depth=12, hidden_size=768, patch_size=2, num_heads=12, **kwargs)
+def MatLatte_M_2(**kwargs):
+    return MatLatte(depth=12, hidden_size=1024, patch_size=2, num_row_heads=16, **kwargs)
 
-def SpatialDiffLatteV2_B_4(**kwargs):
-    return SpatialDiffLatteV2(depth=12, hidden_size=768, patch_size=4, num_heads=12, **kwargs)
+def MatLatte_M_4(**kwargs):
+    return MatLatte(depth=12, hidden_size=1024, patch_size=4, num_row_heads=16, **kwargs)
 
-def SpatialDiffLatteV2_B_8(**kwargs):
-    return SpatialDiffLatteV2(depth=12, hidden_size=768, patch_size=8, num_heads=12, **kwargs)
+def MatLatte_M_8(**kwargs):
+    return MatLatte(depth=12, hidden_size=1024, patch_size=8, num_row_heads=16, **kwargs)
 
-def SpatialDiffLatteV2_S_2(**kwargs):
-    return SpatialDiffLatteV2(depth=12, hidden_size=384, patch_size=2, num_heads=6, **kwargs)
+def MatLatte_B_2(**kwargs):
+    return MatLatte(depth=12, hidden_size=768, patch_size=2, num_row_heads=12, **kwargs)
 
-def SpatialDiffLatteV2_S_4(**kwargs):
-    return SpatialDiffLatteV2(depth=12, hidden_size=384, patch_size=4, num_heads=6, **kwargs)
+def MatLatte_B_4(**kwargs):
+    return MatLatte(depth=12, hidden_size=768, patch_size=4, num_row_heads=12, **kwargs)
 
-def SpatialDiffLatteV2_S_8(**kwargs):
-    return SpatialDiffLatteV2(depth=12, hidden_size=384, patch_size=8, num_heads=6, **kwargs)
+def MatLatte_B_8(**kwargs):
+    return MatLatte(depth=12, hidden_size=768, patch_size=8, num_row_heads=12, **kwargs)
+
+def MatLatte_S_2(**kwargs):
+    return MatLatte(depth=12, hidden_size=384, patch_size=2, num_row_heads=6, **kwargs)
+
+def MatLatte_S_4(**kwargs):
+    return MatLatte(depth=12, hidden_size=384, patch_size=4, num_row_heads=6, **kwargs)
+
+def MatLatte_S_8(**kwargs):
+    return MatLatte(depth=12, hidden_size=384, patch_size=8, num_row_heads=6, **kwargs)
+
+# For image size 256
+def MatLatte_XL_64_512_2(**kwargs):
+    return MatLatte_XL_2(qk_col_dim=64, v_col_dim=512, num_col_heads=64, **kwargs)
+
+def MatLatte_XL_128_512_2(**kwargs):
+    return MatLatte_XL_2(qk_col_dim=128, v_col_dim=512, num_col_heads=128, **kwargs)
+
+def MatLatte_XL_128_1024_2(**kwargs):
+    return MatLatte_XL_2(qk_col_dim=128, v_col_dim=1024, num_col_heads=128, **kwargs)
+
+def MatLatte_XL_256_256_2(**kwargs):
+    return MatLatte_XL_2(qk_col_dim=256, v_col_dim=256, num_col_heads=256, **kwargs)
+
+def MatLatte_XL_256_512_2(**kwargs):
+    return MatLatte_XL_2(qk_col_dim=256, v_col_dim=512, num_col_heads=256, **kwargs)
+
+# For image size 128, 64 tokens per frame
+def MatLatte_M_16_64_2(**kwargs):
+    return MatLatte_M_2(qk_col_dim=16, v_col_dim=64, num_col_heads=16, **kwargs)
+
+def MatLatte_M_4_256_2(**kwargs):
+    return MatLatte_M_2(qk_col_dim=4, v_col_dim=256, num_col_heads=4, **kwargs)
+
+def MatLatte_M_8_256_2(**kwargs):
+    return MatLatte_M_2(qk_col_dim=8, v_col_dim=256, num_col_heads=8, **kwargs)
+
+def MatLatte_M_16_256_2(**kwargs):
+    return MatLatte_M_2(qk_col_dim=16, v_col_dim=256, num_col_heads=16, **kwargs)
+
+def MatLatte_M_32_256_2(**kwargs):
+    return MatLatte_M_2(qk_col_dim=32, v_col_dim=256, num_col_heads=32, **kwargs)
+
+def MatLatte_M_16_512_2(**kwargs):
+    return MatLatte_M_2(qk_col_dim=16, v_col_dim=512, num_col_heads=16, **kwargs)
+
+def MatLatte_M_64_64_2(**kwargs):
+    return MatLatte_M_2(qk_col_dim=64, v_col_dim=64, num_col_heads=64, **kwargs)
+
+def MatLatte_M_64_256_2(**kwargs):
+    return MatLatte_M_2(qk_col_dim=64, v_col_dim=256, num_col_heads=64, **kwargs)
+
+# For image size 64
+def MatLatte_B_16_16_2(**kwargs):
+    return MatLatte_B_2(qk_col_dim=16, v_col_dim=16, num_col_heads=16, **kwargs)
+#============================================================================================
 
 
-SpatialDiffLatteV2_models = {
-    'SpatialDiffLatteV2-XL/2': SpatialDiffLatteV2_XL_2,  'SpatialDiffLatteV2-XL/4': SpatialDiffLatteV2_XL_4,  'SpatialDiffLatteV2-XL/8': SpatialDiffLatteV2_XL_8,
-    'SpatialDiffLatteV2-L/2':  SpatialDiffLatteV2_L_2,   'SpatialDiffLatteV2-L/4':  SpatialDiffLatteV2_L_4,   'SpatialDiffLatteV2-L/8':  SpatialDiffLatteV2_L_8,
-    'SpatialDiffLatteV2-M/2':  SpatialDiffLatteV2_M_2,   'SpatialDiffLatteV2-M/4':  SpatialDiffLatteV2_M_4,   'SpatialDiffLatteV2-M/8':  SpatialDiffLatteV2_M_8,
-    'SpatialDiffLatteV2-B/2':  SpatialDiffLatteV2_B_2,   'SpatialDiffLatteV2-B/4':  SpatialDiffLatteV2_B_4,   'SpatialDiffLatteV2-B/8':  SpatialDiffLatteV2_B_8,
-    'SpatialDiffLatteV2-S/2':  SpatialDiffLatteV2_S_2,   'SpatialDiffLatteV2-S/4':  SpatialDiffLatteV2_S_4,   'SpatialDiffLatteV2-S/8':  SpatialDiffLatteV2_S_8,
+MatLatte_models = {
+    'MatLatte-B/16-16/2': MatLatte_B_16_16_2,
+    'MatLatte-M/64-64/2': MatLatte_M_64_64_2, 'MatLatte-M/16-64/2': MatLatte_M_16_64_2, 'MatLatte-M/64-256/2': MatLatte_M_64_256_2, 
+    'MatLatte-M/16-256/2': MatLatte_M_16_256_2, 'MatLatte-M/16-512/2': MatLatte_M_16_512_2,
+    'MatLatte-M/4-256/2': MatLatte_M_4_256_2, 'MatLatte-M/8-256/2': MatLatte_M_8_256_2, 'MatLatte-M/32-256/2': MatLatte_M_32_256_2,
+    'MatLatte-XL/64-512/2': MatLatte_XL_64_512_2, 'MatLatte-XL/128-512/2': MatLatte_XL_128_512_2, 'MatLatte-XL/256-256/2': MatLatte_XL_256_256_2,
+    'MatLatte-XL/128-1024/2': MatLatte_XL_128_1024_2, 'MatLatte-XL/256-512/2': MatLatte_XL_256_512_2
 }
 
 if __name__ == '__main__':
@@ -543,7 +804,7 @@ if __name__ == '__main__':
     img = torch.randn(3, 16, 4, 32, 32).to(device)
     t = torch.tensor([1, 2, 3]).to(device)
     y = torch.tensor([1, 2, 3]).to(device)
-    network = SpatialDiffLatteV2_XL_2().to(device)
+    network = MatLatte_XL_2().to(device)
     from thop import profile 
     flops, params = profile(network, inputs=(img, t))
     print('FLOPs = ' + str(flops/1000**3) + 'G')

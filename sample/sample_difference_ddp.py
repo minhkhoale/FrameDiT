@@ -124,9 +124,13 @@ def main(args):
     dist.barrier()
 
     # check existing videos and skip them
-    n_existing_video = len([name for name in os.listdir(sample_folder_dir) if os.path.isfile(os.path.join(sample_folder_dir, name)) and name.endswith('.mp4')])
-    if n_existing_video > 0:
-        print(f"Found {n_existing_video} existing videos in {sample_folder_dir}, skipping them.")
+    if args.overwrite:
+        n_existing_video = 0
+        print(f"Overwrite mode enabled, will overwrite any existing videos in {sample_folder_dir}.")
+    else:
+        n_existing_video = len([name for name in os.listdir(sample_folder_dir) if os.path.isfile(os.path.join(sample_folder_dir, name)) and name.endswith('.mp4')])
+        if n_existing_video > 0:
+            print(f"Found {n_existing_video} existing videos in {sample_folder_dir}, skipping them.")
 
     args.num_fvd_samples -= n_existing_video
 
@@ -151,7 +155,7 @@ def main(args):
     print("Sampling method:", args.sample_method)
     print('Tweedie difference threshold:', tweedie_difference_threshold)
     for _ in pbar:
-        z = diffusion.sample_init_noise(n, args.num_frames, args.in_channels, latent_size, device, dtype=torch.float16 if args.use_fp16 else torch.float32)
+        z = diffusion.sample_init_noise((n, args.num_frames, args.in_channels, latent_size, latent_size), device, dtype=torch.float16 if args.use_fp16 else torch.float32)
         
         # Setup classifier-free guidance:
         if using_cfg:
@@ -210,12 +214,15 @@ if __name__ == "__main__":
     parser.add_argument("--save_video_path", type=str, default="./sample_videos/")
     parser.add_argument("--save_ceph", default=False, action='store_true')
     parser.add_argument("--tweedie-threshold", type=float, default=None)
+    parser.add_argument("--overwrite", action=argparse.BooleanOptionalAction, default=False)
 
     args = parser.parse_args()
+    print('args', args)
     omega_conf = OmegaConf.load(args.config)
     omega_conf.ckpt = args.ckpt
     omega_conf.save_video_path = args.save_video_path
     omega_conf.save_ceph = args.save_ceph
+    omega_conf.overwrite = args.overwrite
     if args.tweedie_threshold is not None:
         omega_conf.tweedie_difference_threshold = args.tweedie_threshold
     main(omega_conf)

@@ -1,9 +1,10 @@
+# path:
 ckpt: # will be overwrite
 save_img_path: "./sample_videos/" # will be overwrite
 vae: "./configs/vae/autoencoder_kl.yaml"
 
 # model config: 
-model: DiffLatte-M/2
+model: SpatialDiffLatteV2-M/2
 num_frames: 16
 image_size: 128 # choices=[256, 512]
 in_channels: 4
@@ -13,14 +14,15 @@ attention_bias: True
 learn_sigma: True
 extras: 1 # [1, 2] 1 unconditional generation, 2 class-conditional generation
 num_classes:
-diffusion_name: difference_gaussian_diffusion_v1
 
 # model speedup
 use_compile: False
 use_fp16: False
+diffusion_name: spatial_difference_gaussian_diffusion_v2
+
 
 # sample config:
-seed: 3
+seed: 1
 sample_method: 'ddpm'
 num_sampling_steps: 250
 cfg_scale: 1.0
@@ -34,5 +36,5 @@ fps: 8
 video_quality: 9
 
 # ddp sample config
-per_proc_batch_size: 1
-num_fvd_samples: 1
+per_proc_batch_size: 16
+num_fvd_samples: 2048

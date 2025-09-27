@@ -209,10 +209,35 @@ if __name__ == "__main__":
     parser.add_argument("--config", type=str, default="./configs/tuneavideo.yaml")
     parser.add_argument("--ckpt", type=str, default="")
     parser.add_argument("--save_video_path", type=str, default="./sample_videos/")
-    parser.add_argument("--save_ceph", default=False, action='store_true')
+
+    parser.add_argument('--use-fp16', type=bool, help='Use half precision for inference', default=False)
+    parser.add_argument('--seed', type=int, help='Random seed for sampling', default=0)
+    parser.add_argument('--sample-method', type=str, help='Sampling method', default='ddpm')
+    parser.add_argument('--num-sampling-steps', type=int, help='Number of sampling steps', default=50)
+    parser.add_argument('--cfg-scale', type=float, help='Classifier-free guidance scale', default=1.0)
+    parser.add_argument('--negative-name', type=str, help='Negative prompt name', default='')
+    parser.add_argument('--batch-size', type=int, help='Batch size for sampling', default=4)
+    parser.add_argument('--num-fvd-samples', type=int, help='Number of samples for FVD', default=2048)
+    parser.add_argument('--fps', type=int, help='Frames per second for video', default=8)
+    parser.add_argument('--video-quality', type=int, help='Quality for video encoding (1-10)', default=9)
+    parser.add_argument('--wandb-run-id', type=str, help='W&B run ID for logging', default='')
+
     args = parser.parse_args()
     omega_conf = OmegaConf.load(args.config)
     omega_conf.ckpt = args.ckpt
     omega_conf.save_video_path = args.save_video_path
-    omega_conf.save_ceph = args.save_ceph
+
+    omega_conf.seed = args.seed
+    omega_conf.sample_method = args.sample_method
+    omega_conf.num_sampling_steps = args.num_sampling_steps
+    omega_conf.cfg_scale = args.cfg_scale
+    omega_conf.negative_name = args.negative_name
+
+    omega_conf.use_fp16 = False
+    omega_conf.fps = args.fps
+    omega_conf.video_quality = args.video_quality
+
+    omega_conf.per_proc_batch_size = args.batch_size
+    omega_conf.num_fvd_samples = args.num_fvd_samples
+
     main(omega_conf)

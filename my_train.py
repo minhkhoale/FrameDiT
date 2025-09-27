@@ -45,9 +45,12 @@ os.environ['TORCH_DISTRIBUTED_DEBUG'] = 'DETAIL'
 #################################################################################
 #                                  Training Loop                                #
 #################################################################################
+BIN_EDGES = [0, 200, 400, 600, 800, 1000]
+BIN_LABELS = ["0-199", "200-399", "400-599", "600-799", "800-999"]
+NUM_BINS = 5
+
 
 def main(args):
-
     assert torch.cuda.is_available(), "Training currently requires at least one GPU."
     print('starting main')
     # Setup DDP:
@@ -79,7 +82,11 @@ def main(args):
         model_string_name = args.model.replace("/", "-")  # e.g., Latte-XL/2 --> Latte-XL-2 (for naming folders)
         num_frame_string = 'F' + str(args.num_frames) + 'S' + str(args.frame_interval)
 
+        gaussian_name = args.diffusion_name if 'diffusion_name' in args else None
         experiment_name = f"{experiment_index:03d}-{model_string_name}-{num_frame_string}-{args.dataset}{args.image_size}"
+        if gaussian_name is not None:
+            experiment_name += f"-{gaussian_name}"
+
         experiment_dir = f"{args.results_dir}/{args.dataset}{args.image_size}/{experiment_name}"  # Create an experiment folder
         experiment_dir = get_experiment_dir(experiment_dir, args)
 
@@ -104,6 +111,7 @@ def main(args):
     print('Model', model)
     
     diffusion = create_diffusion(
+        name=args.diffusion_name if 'diffusion_name' in args else 'gaussian_diffusion',
         timestep_respacing=None,
         noise_schedule="linear",
         use_kl=False,
@@ -192,6 +200,10 @@ def main(args):
     running_loss = 0
     running_loss_mse = 0
     running_loss_vb = 0
+    running_bins = {
+        "x_loss_sum":  [0.0] * NUM_BINS,
+        "count":       [0.0] * NUM_BINS,
+    }
     first_epoch = 0
     start_time = time()
 
@@ -254,7 +266,6 @@ def main(args):
             else:
                 gradient_norm = clip_grad_norm_(model.module.parameters(), args.clip_max_norm, clip_grad=True)
 
-            
             lr_scheduler.step()
             if train_steps % args.gradient_accumulation_steps == 0 and train_steps > 0:
                 opt.step()
@@ -265,6 +276,18 @@ def main(args):
             running_loss += loss.item()
             running_loss_mse += mse
             running_loss_vb += vb
+
+            # track bins
+            with torch.no_grad():
+                x_loss_ps  = loss_dict.get('loss',  None)
+                if x_loss_ps is not None:
+                    for i in range(NUM_BINS):
+                        lo, hi = BIN_EDGES[i], BIN_EDGES[i+1]
+                        mask = (t >= lo) & (t < hi)
+                        if mask.any():
+                            # Sum the masked losses (as floats), and count
+                            running_bins["x_loss_sum"][i]  += x_loss_ps[mask].sum().item() / args.gradient_accumulation_steps
+                            running_bins["count"][i]       += mask.sum().item()
             log_steps += 1
             train_steps += 1
             if train_steps % args.log_every == 0:
@@ -277,6 +300,13 @@ def main(args):
                 dist.all_reduce(avg_loss, op=dist.ReduceOp.SUM)
                 avg_loss = avg_loss.item() / dist.get_world_size()
                 logger.info(f"(step={train_steps:07d}/epoch={epoch:04d}) Train Loss: {avg_loss:.4f}, Gradient Norm: {gradient_norm:.4f}, Train Steps/Sec: {steps_per_sec:.2f}, ETA: {(time()-total_start_time):.2f}")
+                x_sums  = torch.tensor(running_bins["x_loss_sum"],  device=device, dtype=torch.float64)
+                counts  = torch.tensor(running_bins["count"],       device=device, dtype=torch.float64)
+                dist.all_reduce(x_sums,  op=dist.ReduceOp.SUM)
+                dist.all_reduce(counts,  op=dist.ReduceOp.SUM)
+
+                x_means  = (x_sums  / (counts + 1e-12)).tolist()
+
 
                 if wandb.run is not None:
                     logging_dict = {
@@ -289,11 +319,21 @@ def main(args):
                         logging_dict["train/xs_mse"] = running_loss_mse / log_steps
                     if 'vb' in loss_dict:
                         logging_dict["train/loss_vb"] = running_loss_vb / log_steps
+
+                    for i, lbl in enumerate(BIN_LABELS):
+                        if counts[i] > 0:
+                            logging_dict[f"train/bin_xs_loss/{lbl}"]  = x_means[i]
+
                     wandb.log(logging_dict, step=train_steps)
+
                 # Reset monitoring variables:
                 running_loss = 0
                 running_loss_mse = 0
                 running_loss_vb = 0
+                running_bins = {
+                    "x_loss_sum":  [0.0] * NUM_BINS,
+                    "count":       [0.0] * NUM_BINS,
+                }
                 log_steps = 0
                 start_time = time()
 

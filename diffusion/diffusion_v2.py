@@ -134,7 +134,7 @@ class BaseDiffusion:
     
     def __str__(self):
         return (
-            f"Diffusion(model_mean_type={self.model_mean_type}, "
+            f"DiffusionV2(model_mean_type={self.model_mean_type}, "
             f"model_var_type={self.model_var_type}, loss_type={self.loss_type})"
         )
     
@@ -528,10 +528,6 @@ class BaseDiffusion:
 
         if self.loss_type == LossType.MSE or self.loss_type == LossType.RESCALED_MSE:
             model_output = model(x_t, t, **model_kwargs)
-            # try:
-            #     model_output = model(x_t, t, **model_kwargs).sample # for tav unet
-            # except:
-            #     model_output = model(x_t, t, **model_kwargs)
 
             if self.model_var_type in [
                 ModelVarType.LEARNED,

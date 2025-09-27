@@ -155,12 +155,12 @@ class LabelEmbedder(nn.Module):
 
 
 #################################################################################
-#                                 Core DiffLatte Model                                #
+#                                 Core DiffLatteV2 Model                                #
 #################################################################################
 
 class TransformerBlock(nn.Module):
     """
-    A DiffLatte tansformer block with adaptive layer norm zero (adaLN-Zero) conditioning.
+    A DiffLatteV2 tansformer block with adaptive layer norm zero (adaLN-Zero) conditioning.
     """
     def __init__(self, hidden_size, num_heads, mlp_ratio=4.0, **block_kwargs):
         super().__init__()
@@ -184,7 +184,7 @@ class TransformerBlock(nn.Module):
 
 class FinalLayer(nn.Module):
     """
-    The final layer of DiffLatte.
+    The final layer of DiffLatteV2.
     """
     def __init__(self, hidden_size, patch_size, out_channels):
         super().__init__()
@@ -202,7 +202,7 @@ class FinalLayer(nn.Module):
         return x
 
 
-class SpatialDiffLatteV2(nn.Module):
+class DiffLatteV2(nn.Module):
     """
     Diffusion model with a Transformer backbone.
     """
@@ -232,11 +232,11 @@ class SpatialDiffLatteV2(nn.Module):
 
         self.num_frames = num_frames
         self.num_diff = num_frames
+        self.total_frames = num_frames + self.num_diff
 
         self.x_embedder = PatchEmbed(input_size, patch_size, in_channels, hidden_size, bias=True)
         self.t_embedder = TimestepEmbedder(hidden_size)
-        self.token_type = nn.Embedding(2, hidden_size) # frame or frame difference
-        self.dx_proj = nn.Linear(hidden_size, hidden_size)
+        self.frame_difference_embedder = LabelEmbedder(2, hidden_size, 0)
 
         if self.extras == 2:
             self.y_embedder = LabelEmbedder(num_classes, hidden_size, class_dropout_prob)
@@ -248,8 +248,8 @@ class SpatialDiffLatteV2(nn.Module):
 
         num_patches = self.x_embedder.num_patches
         # Will use fixed sin-cos embedding:
-        self.spatial_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size), requires_grad=False)
-        self.temp_embed = nn.Parameter(torch.zeros(1, self.num_frames, hidden_size), requires_grad=False)
+        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size), requires_grad=False)
+        self.temp_embed = nn.Parameter(torch.zeros(1, self.total_frames, hidden_size), requires_grad=False)
         self.hidden_size =  hidden_size
 
         self.blocks = nn.ModuleList([
@@ -269,8 +269,8 @@ class SpatialDiffLatteV2(nn.Module):
         self.apply(_basic_init)
 
         # Initialize (and freeze) pos_embed by sin-cos embedding:
-        pos_embed = get_2d_sincos_pos_embed(self.spatial_embed.shape[-1], int(self.x_embedder.num_patches ** 0.5))
-        self.spatial_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
+        pos_embed = get_2d_sincos_pos_embed(self.pos_embed.shape[-1], int(self.x_embedder.num_patches ** 0.5))
+        self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
 
         temp_embed = get_1d_sincos_temp_embed(self.temp_embed.shape[-1], self.temp_embed.shape[-2])
         self.temp_embed.data.copy_(torch.from_numpy(temp_embed).float().unsqueeze(0))
@@ -279,7 +279,7 @@ class SpatialDiffLatteV2(nn.Module):
         w = self.x_embedder.proj.weight.data
         nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
         nn.init.constant_(self.x_embedder.proj.bias, 0)
-        nn.init.normal_(self.token_type.weight, std=0.02)
+        nn.init.normal_(self.frame_difference_embedder.embedding_table.weight, std=0.02)
 
         if self.extras == 2:
             # Initialize label embedding table:
@@ -315,10 +315,24 @@ class SpatialDiffLatteV2(nn.Module):
         imgs = x.reshape(shape=(x.shape[0], c, h * p, h * p))
         return imgs
 
+    def create_frame_difference_embedding(self, x):
+        """
+        Create frame difference embeddings for input video x.
+        x: (N, F, C, H, W) tensor of video inputs
+        output: (N, F, D) tensor of frame difference embeddings
+        """
+        batches = x.shape[0]
+        idx = torch.zeros((batches, self.num_frames), dtype=torch.long, device=x.device)
+        diff_idx = torch.ones((batches, self.num_diff), dtype=torch.long, device=x.device)
+        idx = rearrange(interleave_frames(idx, diff_idx), "b t -> (b t)")
+        emb = self.frame_difference_embedder(idx, self.training)
+        emb = rearrange(emb, "(b t) c -> b t c", b=batches)
+        return emb
+
     # @torch.cuda.amp.autocast()
     # @torch.compile
     def forward(self, 
-                x,
+                x, 
                 t, 
                 y=None, 
                 text_embedding=None, 
@@ -326,73 +340,65 @@ class SpatialDiffLatteV2(nn.Module):
         """
         Forward pass of DiffLatte.
         x: (N, F, C, H, W) tensor of video inputs
-        dx: (N, F, C, H, W) tensor of difference video inputs
         t: (N,) tensor of diffusion timesteps
         y: (N,) tensor of class labels
         """
         if use_fp16:
             x = x.to(dtype=torch.float16)
 
-        x, dx = uncombine_frames_and_difference(x, combine_type='token_interleave') # B, F, C, H, W ; B, F, C, H, W
+        batches, frames, channels, high, weight = x.shape 
+        frame_diff_embed = self.create_frame_difference_embedding(x) # B,F,D
+        frame_diff_embed_spatial = repeat(frame_diff_embed, 'b f d -> (b f) n d', n=self.pos_embed.shape[1])
+        frame_diff_embed_temp = repeat(frame_diff_embed, 'b f d -> (b n) f d', n=self.pos_embed.shape[1])
 
-        batches, frames, channels, height, width = x.shape 
         x = rearrange(x, 'b f c h w -> (b f) c h w')
-        dx = rearrange(dx, 'b f c h w -> (b f) c h w')
-
-        # patchify
-        x = self.x_embedder(x) + self.spatial_embed
-        x_tokens = x.shape[1]
-        dx = self.dx_proj(self.x_embedder(dx)) + self.spatial_embed
-        dx_tokens = dx.shape[1]
-        total_tokens = x_tokens + dx_tokens
-
-        # stack interleave
-        x = combine_frames_and_difference(x, dx, combine_type='token_interleave') # B*F, N*2, D
-        # noise time embedding
-        t = self.t_embedder(t, use_fp16=use_fp16)
-        timestep_spatial = repeat(t, 'b d -> (b f) n d', n=total_tokens, f=frames) 
-        timestep_temp = repeat(t, 'b d -> (b n) f d', n=total_tokens, f=frames)
+        x = self.x_embedder(x) + self.pos_embed
+        t = self.t_embedder(t, use_fp16=use_fp16)                  
+        timestep_spatial = repeat(t, 'b d -> (b f) n d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1]) 
+        timestep_temp = repeat(t, 'b d -> (b n) f d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1])
 
         if self.extras == 2:
             y = self.y_embedder(y, self.training)
-            y_spatial = repeat(y, 'b d -> (b f) n d', n=total_tokens, f=frames)
-            y_temp = repeat(y, 'b d -> (b n) f d', n=total_tokens, f=frames)
+            y_spatial = repeat(y, 'b d -> (b f) n d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1])
+            y_temp = repeat(y, 'b d -> (b n) f d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1])
         elif self.extras == 78:
             text_embedding = self.text_embedding_projection(text_embedding.reshape(batches, -1))
-            y_spatial = repeat(text_embedding, 'b d -> (b f) n d', n=total_tokens, f=frames)
-            y_temp = repeat(text_embedding, 'b d -> (b n) f d', n=total_tokens, f=frames)
-        else:
-            y_spatial, y_temp = 0, 0
-        
-        # token type embedding
-        type_ids = torch.arange(total_tokens, device=x.device) % 2
-        type_emb = self.token_type(type_ids) # N*2, D
-        type_emb_spatial = repeat(type_emb, 'n d -> (b f) n d', b=batches, f=frames)
-        type_emb_temp = repeat(type_emb, 'n d -> (b n) f d', b=batches, f=frames)
-        
-        spatial_c = timestep_spatial + type_emb_spatial + y_spatial
-        temp_c = timestep_temp + type_emb_temp + y_temp
+            text_embedding_spatial = repeat(text_embedding, 'b d -> (b f) n d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1])
+            text_embedding_temp = repeat(text_embedding, 'b d -> (b n) f d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1])
 
         for i in range(0, len(self.blocks), 2):
             spatial_block, temp_block = self.blocks[i:i+2]
-            x  = spatial_block(x, spatial_c)
+            if self.extras == 2:
+                c = timestep_spatial + y_spatial + frame_diff_embed_spatial
+            elif self.extras == 78:
+                c = timestep_spatial + text_embedding_spatial + frame_diff_embed_spatial
+            else:
+                c = timestep_spatial + frame_diff_embed_spatial
+            x  = spatial_block(x, c)
+
             x = rearrange(x, '(b f) t d -> (b t) f d', b=batches)
             # Add Time Embedding
             if i == 0:
                 x = x + self.temp_embed
 
-            x = temp_block(x, temp_c)
+            if self.extras == 2:
+                c = timestep_temp + y_temp + frame_diff_embed_temp
+            elif self.extras == 78:
+                c = timestep_temp + text_embedding_temp + frame_diff_embed_temp
+            else:
+                c = timestep_temp + frame_diff_embed_temp
+
+            x = temp_block(x, c)
             x = rearrange(x, '(b t) f d -> (b f) t d', b=batches)
 
-        x = self.final_layer(x, spatial_c)               
+        if self.extras == 2:
+            c = timestep_spatial + y_spatial + frame_diff_embed_spatial
+        else:
+            c = timestep_spatial + frame_diff_embed_spatial
 
-        x, dx = uncombine_frames_and_difference(x, combine_type='token_interleave') # B*F, N, D ; B*F, N, D
-        x = self.unpatchify(x)
-        dx = self.unpatchify(dx)
-
-        x = combine_frames_and_difference(x, dx, combine_type='token_interleave') # B, F, C, H, W
+        x = self.final_layer(x, c)               
+        x = self.unpatchify(x)                  
         x = rearrange(x, '(b f) c h w -> b f c h w', b=batches)
-
         return x
 
     def forward_with_cfg(self, x, t, y=None, cfg_scale=7.0, use_fp16=False, text_embedding=None):
@@ -480,58 +486,58 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
 #                                   DiffLatte Configs                                  #
 #################################################################################
 
-def SpatialDiffLatteV2_XL_2(**kwargs):
-    return SpatialDiffLatteV2(depth=28, hidden_size=1152, patch_size=2, num_heads=16, **kwargs)
+def DiffLatteV2_XL_2(**kwargs):
+    return DiffLatteV2(depth=28, hidden_size=1152, patch_size=2, num_heads=16, **kwargs)
 
-def SpatialDiffLatteV2_XL_4(**kwargs):
-    return SpatialDiffLatteV2(depth=28, hidden_size=1152, patch_size=4, num_heads=16, **kwargs)
+def DiffLatteV2_XL_4(**kwargs):
+    return DiffLatteV2(depth=28, hidden_size=1152, patch_size=4, num_heads=16, **kwargs)
 
-def SpatialDiffLatteV2_XL_8(**kwargs):
-    return SpatialDiffLatteV2(depth=28, hidden_size=1152, patch_size=8, num_heads=16, **kwargs)
+def DiffLatteV2_XL_8(**kwargs):
+    return DiffLatteV2(depth=28, hidden_size=1152, patch_size=8, num_heads=16, **kwargs)
 
-def SpatialDiffLatteV2_L_2(**kwargs):
-    return SpatialDiffLatteV2(depth=24, hidden_size=1024, patch_size=2, num_heads=16, **kwargs)
+def DiffLatteV2_L_2(**kwargs):
+    return DiffLatteV2(depth=24, hidden_size=1024, patch_size=2, num_heads=16, **kwargs)
 
-def SpatialDiffLatteV2_L_4(**kwargs):
-    return SpatialDiffLatteV2(depth=24, hidden_size=1024, patch_size=4, num_heads=16, **kwargs)
+def DiffLatteV2_L_4(**kwargs):
+    return DiffLatteV2(depth=24, hidden_size=1024, patch_size=4, num_heads=16, **kwargs)
 
-def SpatialDiffLatteV2_L_8(**kwargs):
-    return SpatialDiffLatteV2(depth=24, hidden_size=1024, patch_size=8, num_heads=16, **kwargs)
+def DiffLatteV2_L_8(**kwargs):
+    return DiffLatteV2(depth=24, hidden_size=1024, patch_size=8, num_heads=16, **kwargs)
 
-def SpatialDiffLatteV2_M_2(**kwargs):
-    return SpatialDiffLatteV2(depth=12, hidden_size=1024, patch_size=2, num_heads=16, **kwargs)
+def DiffLatteV2_M_2(**kwargs):
+    return DiffLatteV2(depth=12, hidden_size=1024, patch_size=2, num_heads=16, **kwargs)
 
-def SpatialDiffLatteV2_M_4(**kwargs):
-    return SpatialDiffLatteV2(depth=12, hidden_size=1024, patch_size=4, num_heads=16, **kwargs)
+def DiffLatteV2_M_4(**kwargs):
+    return DiffLatteV2(depth=12, hidden_size=1024, patch_size=4, num_heads=16, **kwargs)
 
-def SpatialDiffLatteV2_M_8(**kwargs):
-    return SpatialDiffLatteV2(depth=12, hidden_size=1024, patch_size=8, num_heads=16, **kwargs)
+def DiffLatteV2_M_8(**kwargs):
+    return DiffLatteV2(depth=12, hidden_size=1024, patch_size=8, num_heads=16, **kwargs)
 
-def SpatialDiffLatteV2_B_2(**kwargs):
-    return SpatialDiffLatteV2(depth=12, hidden_size=768, patch_size=2, num_heads=12, **kwargs)
+def DiffLatteV2_B_2(**kwargs):
+    return DiffLatteV2(depth=12, hidden_size=768, patch_size=2, num_heads=12, **kwargs)
 
-def SpatialDiffLatteV2_B_4(**kwargs):
-    return SpatialDiffLatteV2(depth=12, hidden_size=768, patch_size=4, num_heads=12, **kwargs)
+def DiffLatteV2_B_4(**kwargs):
+    return DiffLatteV2(depth=12, hidden_size=768, patch_size=4, num_heads=12, **kwargs)
 
-def SpatialDiffLatteV2_B_8(**kwargs):
-    return SpatialDiffLatteV2(depth=12, hidden_size=768, patch_size=8, num_heads=12, **kwargs)
+def DiffLatteV2_B_8(**kwargs):
+    return DiffLatteV2(depth=12, hidden_size=768, patch_size=8, num_heads=12, **kwargs)
 
-def SpatialDiffLatteV2_S_2(**kwargs):
-    return SpatialDiffLatteV2(depth=12, hidden_size=384, patch_size=2, num_heads=6, **kwargs)
+def DiffLatteV2_S_2(**kwargs):
+    return DiffLatteV2(depth=12, hidden_size=384, patch_size=2, num_heads=6, **kwargs)
 
-def SpatialDiffLatteV2_S_4(**kwargs):
-    return SpatialDiffLatteV2(depth=12, hidden_size=384, patch_size=4, num_heads=6, **kwargs)
+def DiffLatteV2_S_4(**kwargs):
+    return DiffLatteV2(depth=12, hidden_size=384, patch_size=4, num_heads=6, **kwargs)
 
-def SpatialDiffLatteV2_S_8(**kwargs):
-    return SpatialDiffLatteV2(depth=12, hidden_size=384, patch_size=8, num_heads=6, **kwargs)
+def DiffLatteV2_S_8(**kwargs):
+    return DiffLatteV2(depth=12, hidden_size=384, patch_size=8, num_heads=6, **kwargs)
 
 
-SpatialDiffLatteV2_models = {
-    'SpatialDiffLatteV2-XL/2': SpatialDiffLatteV2_XL_2,  'SpatialDiffLatteV2-XL/4': SpatialDiffLatteV2_XL_4,  'SpatialDiffLatteV2-XL/8': SpatialDiffLatteV2_XL_8,
-    'SpatialDiffLatteV2-L/2':  SpatialDiffLatteV2_L_2,   'SpatialDiffLatteV2-L/4':  SpatialDiffLatteV2_L_4,   'SpatialDiffLatteV2-L/8':  SpatialDiffLatteV2_L_8,
-    'SpatialDiffLatteV2-M/2':  SpatialDiffLatteV2_M_2,   'SpatialDiffLatteV2-M/4':  SpatialDiffLatteV2_M_4,   'SpatialDiffLatteV2-M/8':  SpatialDiffLatteV2_M_8,
-    'SpatialDiffLatteV2-B/2':  SpatialDiffLatteV2_B_2,   'SpatialDiffLatteV2-B/4':  SpatialDiffLatteV2_B_4,   'SpatialDiffLatteV2-B/8':  SpatialDiffLatteV2_B_8,
-    'SpatialDiffLatteV2-S/2':  SpatialDiffLatteV2_S_2,   'SpatialDiffLatteV2-S/4':  SpatialDiffLatteV2_S_4,   'SpatialDiffLatteV2-S/8':  SpatialDiffLatteV2_S_8,
+DiffLatteV2_models = {
+    'DiffLatteV2-XL/2': DiffLatteV2_XL_2,  'DiffLatteV2-XL/4': DiffLatteV2_XL_4,  'DiffLatteV2-XL/8': DiffLatteV2_XL_8,
+    'DiffLatteV2-L/2':  DiffLatteV2_L_2,   'DiffLatteV2-L/4':  DiffLatteV2_L_4,   'DiffLatteV2-L/8':  DiffLatteV2_L_8,
+    'DiffLatteV2-M/2':  DiffLatteV2_M_2,   'DiffLatteV2-M/4':  DiffLatteV2_M_4,   'DiffLatteV2-M/8':  DiffLatteV2_M_8,
+    'DiffLatteV2-B/2':  DiffLatteV2_B_2,   'DiffLatteV2-B/4':  DiffLatteV2_B_4,   'DiffLatteV2-B/8':  DiffLatteV2_B_8,
+    'DiffLatteV2-S/2':  DiffLatteV2_S_2,   'DiffLatteV2-S/4':  DiffLatteV2_S_4,   'DiffLatteV2-S/8':  DiffLatteV2_S_8,
 }
 
 if __name__ == '__main__':
@@ -543,7 +549,7 @@ if __name__ == '__main__':
     img = torch.randn(3, 16, 4, 32, 32).to(device)
     t = torch.tensor([1, 2, 3]).to(device)
     y = torch.tensor([1, 2, 3]).to(device)
-    network = SpatialDiffLatteV2_XL_2().to(device)
+    network = DiffLatteV2_XL_2().to(device)
     from thop import profile 
     flops, params = profile(network, inputs=(img, t))
     print('FLOPs = ' + str(flops/1000**3) + 'G')

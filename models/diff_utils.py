@@ -14,8 +14,8 @@ def get_mean(frames):
 def get_sum(frames):
     return frames[:, 1:] + frames[:, :-1]
 
-def combine_frames_and_difference(frames, diff, combine_type='interleave'):
-    assert diff.shape[1] == frames.shape[1] - 1, f"diff shape {diff.shape} must have one less time step than frames {frames.shape}"
+def combine_frames_and_difference(frames, diff, combine_type='interleave', dim=None):
+    # assert diff.shape[1] == frames.shape[1] - 1, f"diff shape {diff.shape} must have one less time step than frames {frames.shape}"
     match combine_type:
         case 'concat':
             return torch.cat([frames, diff], dim=1)
@@ -39,6 +39,8 @@ def uninterleave_frames(xy, frame_dim=1):
     x = xy.index_select(frame_dim, torch.arange(0, 2*f, 2, device=xy.device))
     dx = xy.index_select(frame_dim, torch.arange(1, 2*f, 2, device=xy.device))
     return x, dx
+
+
         
 
 def uncombine_frames_and_difference(x, combine_type='interleave'):

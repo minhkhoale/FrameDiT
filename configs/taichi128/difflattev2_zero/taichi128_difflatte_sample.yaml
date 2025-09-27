@@ -1,3 +1,4 @@
+# path:
 ckpt: # will be overwrite
 save_img_path: "./sample_videos/" # will be overwrite
 vae: "./configs/vae/autoencoder_kl.yaml"
@@ -13,14 +14,13 @@ attention_bias: True
 learn_sigma: True
 extras: 1 # [1, 2] 1 unconditional generation, 2 class-conditional generation
 num_classes:
-diffusion_name: difference_gaussian_diffusion_v1
 
 # model speedup
 use_compile: False
 use_fp16: False
 
 # sample config:
-seed: 3
+seed: 1
 sample_method: 'ddpm'
 num_sampling_steps: 250
 cfg_scale: 1.0

@@ -15,7 +15,7 @@ from .gaussian_diffusion import _extract_into_tensor, mean_flat, ModelMeanType, 
 from models.diff_utils import *
 
 
-class SpatialDifferenceGaussianDiffusionV2:
+class DifferenceGaussianDiffusion_v2:
     """
     Utilities for training and sampling diffusion models.
     Original ported from this codebase:
@@ -75,7 +75,7 @@ class SpatialDifferenceGaussianDiffusionV2:
     
     def __str__(self):
         return "" \
-        "SpatialDifferenceGaussianDiffusionV2: \n" \
+        "DifferenceGaussianDiffusion_v1: \n" \
         f"  num_timesteps: {self.num_timesteps}\n" \
         f"  model_mean_type: {self.model_mean_type}\n" \
         f"  model_var_type: {self.model_var_type}\n" \
@@ -132,7 +132,7 @@ class SpatialDifferenceGaussianDiffusionV2:
         )
         return posterior_mean, posterior_variance, posterior_log_variance_clipped
 
-    def p_mean_variance(self, model, x, t, clip_denoised=True, denoised_fn=None, model_kwargs=None, tweedie_difference_threshold=None):
+    def p_mean_variance(self, model, tweedie_difference_threshold, x, t, clip_denoised=True, denoised_fn=None, model_kwargs=None):
         """
         Apply the model to get p(x_{t-1} | x_t), as well as a prediction of
         the initial x, x_0.
@@ -159,7 +159,10 @@ class SpatialDifferenceGaussianDiffusionV2:
         B, F, C = x.shape[:3]
         assert t.shape == (B,)
         model_output = model(x, t, **model_kwargs)
-
+        # try:
+        #     model_output = model_output.sample # for tav unet
+        # except:
+        #     model_output = model(x, t, **model_kwargs)
         if isinstance(model_output, tuple):
             model_output, extra = model_output
         else:
@@ -170,6 +173,10 @@ class SpatialDifferenceGaussianDiffusionV2:
             model_output, model_var_values = th.split(model_output, C, dim=2)
 
             # \ep^{t,t-1}_ku = (\ep^t_kz - \ep^{t-1}_kz) / \sqrt{2}
+            frame_model_output, _ = uncombine_tensors(model_output)
+            diff_model_output = get_difference(frame_model_output) / np.sqrt(2)
+            model_output = combine_tensors(frame_model_output, diff_model_output)
+
             min_log = _extract_into_tensor(self.posterior_log_variance_clipped, t, x.shape)
             max_log = _extract_into_tensor(np.log(self.betas), t, x.shape)
             # The model_var_values is [-1, 1] for [min_var, max_var].
@@ -205,15 +212,13 @@ class SpatialDifferenceGaussianDiffusionV2:
             pred_xstart = process_xstart(
                 self._predict_xstart_from_eps(x_t=x, t=t, eps=model_output)
             )
-        # if tweedie_difference_threshold is not None:
-        #     print('pred_xstart', pred_xstart.shape)
-        #     tweedie_difference_mask = t<=tweedie_difference_threshold
-        #     print('tweedie_difference_mask', tweedie_difference_mask)
-        #     original_pred_xstart = pred_xstart.clone()
-        #     pred_frame_start, _ = uncombine_frames_and_difference(pred_xstart)
-        #     td_pred_diff_start = get_difference(pred_frame_start, padding=True)
-        #     td_pred_xstart = combine_frames_and_difference(pred_frame_start, td_pred_diff_start)
-        #     pred_xstart = th.where(tweedie_difference_mask[:, None, None, None, None], td_pred_xstart, pred_xstart)
+        if tweedie_difference_threshold is not None:
+            tweedie_difference_mask = t<=tweedie_difference_threshold
+            original_pred_xstart = pred_xstart.clone()
+            pred_frame_start, _ = uncombine_tensors(pred_xstart)
+            td_pred_diff_start = get_difference(pred_frame_start)
+            td_pred_xstart = combine_tensors(pred_frame_start, td_pred_diff_start)
+            pred_xstart = th.where(tweedie_difference_mask[:, None, None, None, None], td_pred_xstart, pred_xstart)
 
         model_mean, _, _ = self.q_posterior_mean_variance(x_start=pred_xstart, x_t=x, t=t)
 
@@ -223,6 +228,7 @@ class SpatialDifferenceGaussianDiffusionV2:
             "variance": model_variance,
             "log_variance": model_log_variance,
             "pred_xstart": pred_xstart,
+            "original_pred_xstart": original_pred_xstart if tweedie_difference_mask is not None else None,
             "extra": extra,
         }
 
@@ -275,7 +281,11 @@ class SpatialDifferenceGaussianDiffusionV2:
             model_kwargs=model_kwargs,
             tweedie_difference_threshold=tweedie_difference_threshold
         )
-        noise = th.randn_like(x)  # noise for frames + diff
+        n_frames = int((x.shape[1] + 1) / 2)
+        frame_noise = th.randn_like(x[:, :n_frames])  # noise for frames
+        diff_noise = get_difference(frame_noise) / np.sqrt(2)
+        #noise = combine_frames_and_difference(frame_noise, diff_noise)
+        # noise = th.randn_like(x)  # noise for frames + diff
 
         nonzero_mask = (
             (t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
@@ -560,7 +570,7 @@ class SpatialDifferenceGaussianDiffusionV2:
         output_no_mean = th.where((repeat(t, 'b -> b f c h w', b=B, f=F, c=C, h=H, w=W) == 0), decoder_nll_no_mean, kl_no_mean).detach()
         return {"output": output, "output_no_mean": output_no_mean, "pred_xstart": out["pred_xstart"]}
 
-    def training_losses(self, model, x_start, dx_start, t, model_kwargs=None, x_noise=None, dx_noise=None):
+    def training_losses(self, model, x_start, t, model_kwargs=None, noise=None):
         """
         Compute training losses for a single timestep.
         :param model: the model to evaluate loss on.
@@ -575,22 +585,34 @@ class SpatialDifferenceGaussianDiffusionV2:
         if model_kwargs is None:
             model_kwargs = {}
         
-        if x_noise is None:
-            x_noise = th.randn_like(x_start)  # noise for frames
-        if dx_noise is None:
-            dx_noise = th.randn_like(dx_start)  # noise for diff
-            
-        x_t = self.q_sample(x_start, t, noise=x_noise)
-        dx_t = self.q_sample(dx_start, t, noise=dx_noise)
+        n_frames = int((x_start.shape[1] + 1) / 2)
+        if noise is None:
+            x_noise = th.randn_like(x_start[:, :n_frames])  # noise for frames
+            diff_noise = get_difference(x_noise) / np.sqrt(2)
+            noise = combine_tensors(x_noise, diff_noise)
 
-        x_start = combine_frames_and_difference(x_start, dx_start, combine_type='token_interleave')
-        x_noise = combine_frames_and_difference(x_noise, dx_noise, combine_type='token_interleave')
-        x_t = combine_frames_and_difference(x_t, dx_t, combine_type='token_interleave')
+        x_t = self.q_sample(x_start, t, noise=noise)
 
         terms = {}
 
-        if self.loss_type == LossType.MSE or self.loss_type == LossType.RESCALED_MSE:
+        if self.loss_type == LossType.KL or self.loss_type == LossType.RESCALED_KL:
+            terms["loss"] = self._vb_terms_bpd(
+                model=model,
+                x_start=x_start,
+                x_t=x_t,
+                t=t,
+                clip_denoised=False,
+                model_kwargs=model_kwargs,
+            )["output"]
+            if self.loss_type == LossType.RESCALED_KL:
+                terms["loss"] *= self.num_timesteps
+        elif self.loss_type == LossType.MSE or self.loss_type == LossType.RESCALED_MSE:
             model_output = model(x_t, t, **model_kwargs)
+            # try:
+            #     model_output = model(x_t, t, **model_kwargs).sample # for tav unet
+            # except:
+            #     model_output = model(x_t, t, **model_kwargs)
+
             if self.model_var_type in [
                 ModelVarType.LEARNED,
                 ModelVarType.LEARNED_RANGE,
@@ -601,7 +623,6 @@ class SpatialDifferenceGaussianDiffusionV2:
                 # Learn the variance using the variational bound, but don't let
                 # it affect our mean prediction.
                 frozen_out = th.cat([model_output.detach(), model_var_values], dim=2)
-
                 vb_term_outputs = self._vb_terms_bpd(
                     model=lambda *args, r=frozen_out: r,
                     x_start=x_start,
@@ -609,44 +630,32 @@ class SpatialDifferenceGaussianDiffusionV2:
                     t=t,
                     clip_denoised=False,
                 )
-                vb = vb_term_outputs["output"]
-                vb_no_mean = vb_term_outputs["output_no_mean"].detach()
+                terms["vb"] = vb_term_outputs["output"]
+                terms["vb_no_mean"] = vb_term_outputs["output_no_mean"]
 
                 if self.loss_type == LossType.RESCALED_MSE:
                     # Divide by 1000 for equivalence with initial implementation.
                     # Without a factor of 1/1000, the VB term hurts the MSE term.
-                    vb *= self.num_timesteps / 1000.0
-                    vb_no_mean *= self.num_timesteps / 1000.0
+                    terms["vb"] *= self.num_timesteps / 1000.0
+                    terms["vb_no_mean"] *= self.num_timesteps / 1000.0
 
-                x_vb_no_mean, dx_vb_no_mean = combine_frames_and_difference(vb_no_mean, combine_type='token_interleave')
-                terms["vb"] = vb
-                terms["x_vb"] = mean_flat(x_vb_no_mean)
-                terms["dx_vb"] = mean_flat(dx_vb_no_mean)
-
-            # combined target
             target = {
                 ModelMeanType.PREVIOUS_X: self.q_posterior_mean_variance(
                     x_start=x_start, x_t=x_t, t=t
                 )[0],
                 ModelMeanType.START_X: x_start,
-                ModelMeanType.EPSILON: x_noise,
+                ModelMeanType.EPSILON: noise,
             }[self.model_mean_type]
             assert model_output.shape == target.shape == x_start.shape
-
-            mse_no_mean = (target - model_output) ** 2
-            x_mse_no_mean, dx_mse_no_mean = combine_frames_and_difference(mse_no_mean, combine_type='token_interleave')
-            terms["mse"] = mean_flat(mse_no_mean)
-            terms["x_mse"] = mean_flat(x_mse_no_mean)
-            terms["dx_mse"] = mean_flat(dx_mse_no_mean)
+            terms["mse"] = mean_flat((target - model_output) ** 2)
+            terms["mse_no_mean"] = ((target - model_output) ** 2).detach()
 
             if "vb" in terms:
                 terms["loss"] = terms["mse"] + terms["vb"]
-                terms["x_loss"] = terms["x_mse"] + terms["x_vb"]
-                terms["dx_loss"] = terms["dx_mse"] + terms["dx_vb"]
+                terms["loss_no_mean"] = terms["mse_no_mean"] + terms["vb_no_mean"]
             else:
                 terms["loss"] = terms["mse"]
-                terms["x_loss"] = terms["x_mse"]
-                terms["dx_loss"] = terms["dx_mse"]
+                terms["loss_no_mean"] = terms["mse_no_mean"]
         else:
             raise NotImplementedError(self.loss_type)
 
@@ -723,7 +732,7 @@ class SpatialDifferenceGaussianDiffusionV2:
             "mse": mse,
         }
 
-    def sample_init_noise(self, shape, device, dtype=th.float32):
+    def sample_init_noise(self, batch_size, n_frames, in_channel, latent_size, device, dtype=th.float32):
         """
         Sample the initial noise for the diffusion process.
         :param batch_size: the number of samples to produce.
@@ -734,6 +743,9 @@ class SpatialDifferenceGaussianDiffusionV2:
         :return: a batch of samples, of shape
                  [batch_size, n_frames, in_channel, latent_size, latent_size].
         """
-        shape = list(shape)
-        shape[3] = shape[3] * 2  # adjust for frames + diff
-        return th.randn(*shape, device=device, dtype=dtype)
+        frame_noise = th.randn(
+            batch_size, n_frames, in_channel, latent_size, latent_size, device=device, dtype=dtype
+        )
+        diff_noise = get_difference(frame_noise) / np.sqrt(2)
+        noise = combine_tensors(frame_noise, diff_noise)
+        return noise
