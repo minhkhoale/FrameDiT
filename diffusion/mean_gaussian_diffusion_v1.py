@@ -15,7 +15,7 @@ from .gaussian_diffusion import _extract_into_tensor, mean_flat, ModelMeanType, 
 from models.diff_utils import *
 
 
-class MeanGaussianDiffusion_v0:
+class MeanGaussianDiffusion_v1:
     """
     Utilities for training and sampling diffusion models.
     Original ported from this codebase:
@@ -75,7 +75,7 @@ class MeanGaussianDiffusion_v0:
     
     def __str__(self):
         return "" \
-        "MeanGaussianDiffusion_v0: \n" \
+        "MeanGaussianDiffusion_v1: \n" \
         f"  num_timesteps: {self.num_timesteps}\n" \
         f"  model_mean_type: {self.model_mean_type}\n" \
         f"  model_var_type: {self.model_var_type}\n" \
@@ -173,8 +173,8 @@ class MeanGaussianDiffusion_v0:
             model_output, model_var_values = th.split(model_output, C, dim=2)
 
             frame_model_output, _ = uncombine_frames_and_difference(model_output)
-            mean_model_output = get_sum(frame_model_output) / np.sqrt(2)
-            model_output = combine_frames_and_difference(frame_model_output, mean_model_output)
+            diff_model_output = get_difference(frame_model_output) / np.sqrt(2)
+            model_output = combine_frames_and_difference(frame_model_output, diff_model_output)
 
             min_log = _extract_into_tensor(self.posterior_log_variance_clipped, t, x.shape)
             max_log = _extract_into_tensor(np.log(self.betas), t, x.shape)
@@ -214,7 +214,7 @@ class MeanGaussianDiffusion_v0:
         if tweedie_difference_mask is not None:
             original_pred_xstart = pred_xstart.clone()
             pred_frame_start, _ = uncombine_frames_and_difference(pred_xstart)
-            td_pred_diff_start = get_mean(pred_frame_start)
+            td_pred_diff_start = get_difference(pred_frame_start)
             td_pred_xstart = combine_frames_and_difference(pred_frame_start, td_pred_diff_start)
             pred_xstart = th.where(tweedie_difference_mask[:, None, None, None, None], td_pred_xstart, pred_xstart)
 
@@ -311,7 +311,7 @@ class MeanGaussianDiffusion_v0:
         )
         n_frames = int((x.shape[1] + 1) / 2)
         frame_noise = th.randn_like(x[:, :n_frames])  # noise for frames
-        diff_noise = get_sum(frame_noise) / np.sqrt(2)
+        diff_noise = get_difference(frame_noise) / np.sqrt(2)
         noise = combine_frames_and_difference(frame_noise, diff_noise)
         # noise = th.randn_like(x)  # noise for frames + diff
 
@@ -615,9 +615,10 @@ class MeanGaussianDiffusion_v0:
         
         n_frames = int((x_start.shape[1] + 1) / 2)
         if noise is None:
-            x_noise = th.randn_like(x_start[:, :n_frames])  # noise for frames
-            sum_noise = get_sum(x_noise) / np.sqrt(2)
-            noise = combine_frames_and_difference(x_noise, sum_noise)
+            # x_noise = th.randn_like(x_start[:, :n_frames])  # noise for frames
+            # sum_noise = get_sum(x_noise) / np.sqrt(2)
+            # noise = combine_frames_and_difference(x_noise, sum_noise)
+            noise = th.randn_like(x_start)  # noise for frames + diff
 
         x_t = self.q_sample(x_start, t, noise=noise)
 
@@ -774,6 +775,6 @@ class MeanGaussianDiffusion_v0:
         frame_noise = th.randn(
             batch_size, n_frames, in_channel, latent_size, latent_size, device=device, dtype=dtype
         )
-        diff_noise = get_sum(frame_noise) / np.sqrt(2)
+        diff_noise = get_difference(frame_noise) / np.sqrt(2)
         noise = combine_frames_and_difference(frame_noise, diff_noise)
         return noise

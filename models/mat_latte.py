@@ -92,25 +92,36 @@ class MatrixLinear(nn.Module):
         bias=True,
         device=None,
         dtype=None,
+        u_type='param'
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
+        self.u_type = u_type
 
-        # self.u = nn.Parameter(torch.eye(in_features[0], device='cuda:0'))
-        # self.u = torch.eye(in_features[0], device='cuda:0')
-        self.u = nn.Parameter(torch.empty((in_features[0], out_features[0]), **factory_kwargs))
+        match u_type:
+            case 'param', 'softmax':
+                self.u = nn.Parameter(torch.empty((in_features[0], out_features[0]), **factory_kwargs))
+            case 'identity':
+                assert in_features[0] == out_features[0], f"in_features[0] size {in_features[0]} must be equal to out_features[0] size {out_features[0]} for identity u"
+                u = torch.eye(in_features[0], **factory_kwargs)
+                self.register_buffer('u', u)
+            case _:
+                raise NotImplementedError(f"Unknown u_type: {u_type}")
+
         self.w = nn.Parameter(torch.empty((in_features[1], out_features[1]), **factory_kwargs))
 
-        # self.u_norm = nn.LayerNorm(in_features[0], elementwise_affine=False, eps=1e-6)
         if bias:
             self.bias = nn.Parameter(torch.empty(out_features, **factory_kwargs))
         else:
             self.register_parameter("bias", None)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
-        x = matrix_mul(input, self.u, self.w)
+        if self.u_type == 'softmax':
+            x = matrix_mul_softmax(input, self.u, self.w)
+        else:
+            x = matrix_mul(input, self.u, self.w)
         # x = matrix_mul_one_side(input, self.w)
         
         if self.bias is not None:
@@ -138,7 +149,8 @@ class MatrixAttention(nn.Module):
         attn_drop: float = 0.0,
         proj_drop: float = 0.0,
         use_bias=True,
-        attention_mode='math'
+        attention_mode='math',
+        u_type='param'
     ):
         super().__init__()
         assert qk_col_dim % num_col_heads == 0, "qk_col_dim must be divisible by num_col_heads"
@@ -161,11 +173,10 @@ class MatrixAttention(nn.Module):
         self.qk_head_col_dim = self.qk_col_dim // num_col_heads
         self.v_head_col_dim = self.v_col_dim // num_col_heads
 
-        self.linear_q = MatrixLinear((self.col_dim, self.row_dim), (self.qk_col_dim, self.row_dim), bias=self.use_bias)
-        self.linear_k = MatrixLinear((self.col_dim, self.row_dim), (self.qk_col_dim, self.row_dim), bias=self.use_bias)
-        self.linear_v = MatrixLinear((self.col_dim, self.row_dim), (self.v_col_dim, self.row_dim), bias=self.use_bias)
-
-        self.proj_v = MatrixLinear((self.v_col_dim, self.row_dim), (self.col_dim, self.row_dim), bias=self.use_bias)
+        self.linear_q = MatrixLinear((self.col_dim, self.row_dim), (self.qk_col_dim, self.row_dim), bias=self.use_bias, u_type=u_type)
+        self.linear_k = MatrixLinear((self.col_dim, self.row_dim), (self.qk_col_dim, self.row_dim), bias=self.use_bias, u_type=u_type)
+        self.linear_v = MatrixLinear((self.col_dim, self.row_dim), (self.v_col_dim, self.row_dim), bias=self.use_bias, u_type=u_type)
+        self.proj_v = MatrixLinear((self.v_col_dim, self.row_dim), (self.col_dim, self.row_dim), bias=self.use_bias, u_type=u_type)
 
         self.scale = (self.qk_head_col_dim*self.head_row_dim)**-0.5
 
@@ -412,6 +423,7 @@ class MatLatte(nn.Module):
         learn_sigma=True,
         extras=1,
         attention_mode='math',
+        **kwargs
     ):
         super().__init__()
         self.learn_sigma = learn_sigma
@@ -448,7 +460,8 @@ class MatLatte(nn.Module):
             qk_col_dim=qk_col_dim,
             v_col_dim=v_col_dim,
             num_col_heads=num_col_heads,
-            num_row_heads=num_row_heads
+            num_row_heads=num_row_heads,
+            u_type=kwargs.get('u_type', 'param'),
         )
 
         self.blocks = nn.ModuleList([
@@ -756,6 +769,9 @@ def MatLatte_XL_256_512_2(**kwargs):
     return MatLatte_XL_2(qk_col_dim=256, v_col_dim=512, num_col_heads=256, **kwargs)
 
 # For image size 128, 64 tokens per frame
+def MatLatte_M_1_256_2(**kwargs):
+    return MatLatte_M_2(qk_col_dim=1, v_col_dim=256, num_col_heads=1, **kwargs)
+
 def MatLatte_M_4_256_2(**kwargs):
     return MatLatte_M_2(qk_col_dim=4, v_col_dim=256, num_col_heads=4, **kwargs)
 
@@ -771,6 +787,10 @@ def MatLatte_M_16_512_2(**kwargs):
 def MatLatte_M_16_256_2(**kwargs):
     return MatLatte_M_2(qk_col_dim=16, v_col_dim=256, num_col_heads=16, **kwargs)
 
+def MatLatte_M_16_256_2(**kwargs):
+    return MatLatte_M_2(qk_col_dim=16, v_col_dim=256, num_col_heads=16, **kwargs)
+
+
 def MatLatte_M_16_64_2(**kwargs):
     return MatLatte_M_2(qk_col_dim=16, v_col_dim=64, num_col_heads=16, **kwargs)
 
@@ -783,19 +803,24 @@ def MatLatte_M_64_64_2(**kwargs):
 def MatLatte_M_64_256_2(**kwargs):
     return MatLatte_M_2(qk_col_dim=64, v_col_dim=256, num_col_heads=64, **kwargs)
 
+def MatLatte_M_64_64_2_identity_u(**kwargs):
+    return MatLatte_M_2(qk_col_dim=64, v_col_dim=64, num_col_heads=64, u_type='identity', **kwargs)
+
 # For image size 64
 def MatLatte_B_16_16_2(**kwargs):
     return MatLatte_B_2(qk_col_dim=16, v_col_dim=16, num_col_heads=16, **kwargs)
+
 #============================================================================================
 
 
 MatLatte_models = {
-    
-    'MatLatte-M/64-64/2': MatLatte_M_64_64_2, 'MatLatte-M/64-256/2': MatLatte_M_64_256_2, 
-    'MatLatte-B/16-16/2': MatLatte_B_16_16_2, 'MatLatte-M/16-64/2': MatLatte_M_16_64_2, 'MatLatte-M/16-256/2': MatLatte_M_16_256_2, 'MatLatte-M/16-512/2': MatLatte_M_16_512_2,
-    'MatLatte-M/32-256/2': MatLatte_M_32_256_2,
-    'MatLatte-M/8-256/2': MatLatte_M_8_256_2, 
+    'MatLatte-B/16-16/2': MatLatte_B_16_16_2,
+    'MatLatte-M/1-256/2': MatLatte_M_1_256_2,
     'MatLatte-M/4-256/2': MatLatte_M_4_256_2, 'MatLatte-M/4-512/2': MatLatte_M_4_512_2, 
+    'MatLatte-M/8-256/2': MatLatte_M_8_256_2, 
+    'MatLatte-M/16-64/2': MatLatte_M_16_64_2, 'MatLatte-M/16-256/2': MatLatte_M_16_256_2, 'MatLatte-M/16-512/2': MatLatte_M_16_512_2,
+    'MatLatte-M/32-256/2': MatLatte_M_32_256_2,
+    'MatLatte-M/64-64/2': MatLatte_M_64_64_2, 'MatLatte-M/64-256/2': MatLatte_M_64_256_2,  'MatLatte-M/64-64/2-identity-u': MatLatte_M_64_64_2_identity_u,
     'MatLatte-XL/64-512/2': MatLatte_XL_64_512_2, 'MatLatte-XL/128-512/2': MatLatte_XL_128_512_2, 'MatLatte-XL/256-256/2': MatLatte_XL_256_256_2,
     'MatLatte-XL/128-1024/2': MatLatte_XL_128_1024_2, 'MatLatte-XL/256-512/2': MatLatte_XL_256_512_2
 }
