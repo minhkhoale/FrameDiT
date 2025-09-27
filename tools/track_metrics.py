@@ -19,12 +19,12 @@ from .tracking_utils import (
     mark_processed,
     extract_step_from_ckpt,
     get_real_data_path,
+    get_available_gpus
 )
 import wandb
 # ==============================
 # CONFIG — EDIT THESE
 # ==============================
-CUDA_VISIBLE_DEVICES = "0"
 SAMPLE_DIFFERENCE_ENTRY = "sample/sample_difference_ddp.py"
 SAMPLE_ENTRY = "sample/sample_ddp.py"
 METRICS_SCRIPT = "tools/my_cal_metrics_for_dataset.py"
@@ -33,10 +33,13 @@ STATE_FILE = 'processed_checkpoints.txt'  # tracks processed checkpoints
 @dataclass(frozen=True)
 class RunEnv:
     cuda_visible_devices: str
+    master_port: Optional[int] = None
 
     def as_environ(self) -> dict:
         env = os.environ.copy()
         env["CUDA_VISIBLE_DEVICES"] = self.cuda_visible_devices
+        if self.master_port is not None:
+            env["MASTER_PORT"] = str(self.master_port)
         return env
 
 
@@ -101,7 +104,8 @@ def run_sampling(
     cmd = [
         "torchrun",
         "--nnodes=1",
-        "--nproc_per_node=1",
+        f"--nproc_per_node={env.cuda_visible_devices.count(',') + 1}",
+        f"--master_port={env.master_port}" if env.master_port is not None else "",
         sampler,
         "--config", str(args.config_path),
         "--ckpt", str(ckpt_path),
@@ -199,27 +203,27 @@ def process_checkpoint(
         lf.write(f"[info] Waiting for file to become stable: {ckpt_path}\n")
     wait_for_stable_file(ckpt_path)
 
-    # rc = run_sampling(
-    #     env=env,
-    #     log_file=log_file,
-    #     ckpt_path=ckpt_path,
-    #     save_video_path=out_dir,
-    #     args=sampler_args,
-    # )
+    rc = run_sampling(
+        env=env,
+        log_file=log_file,
+        ckpt_path=ckpt_path,
+        save_video_path=out_dir,
+        args=sampler_args,
+    )
 
-    # if rc != 0:
-    #     return
+    if rc != 0:
+        return
     
-    # rc = run_metrics(
-    #     env=env,
-    #     log_file=log_file,
-    #     real_data_path=real_data_path,
-    #     fake_data_path=out_dir,
-    #     resolution=metrics_resolution,
-    #     result_file=metrics_file,
-    # )
-    # if rc != 0:
-    #     return
+    rc = run_metrics(
+        env=env,
+        log_file=log_file,
+        real_data_path=real_data_path,
+        fake_data_path=out_dir,
+        resolution=metrics_resolution,
+        result_file=metrics_file,
+    )
+    if rc != 0:
+        return
     
     # write to wandb
     write_metrics_to_wandb(metrics_file, step)
@@ -332,7 +336,11 @@ def main():
         print("[warn] [wandb] run_id is not set. Your sampler/metrics scripts must handle W&B init on their own.")
 
     real_data_path = Path(get_real_data_path(dataset_name=paths.dataset_name))
-    env = RunEnv(cuda_visible_devices=CUDA_VISIBLE_DEVICES)
+
+    devices = get_available_gpus()
+    cuda_available_devices = ",".join(str(d) for d in devices)
+    master_port = 29500 + (os.getpid() % 1000)  # Randomize port a bit to avoid collisions
+    env = RunEnv(cuda_visible_devices=cuda_available_devices, master_port=master_port)
 
     sampler_args = SamplerArgs(
         is_difference=("difflatte" in paths.experiment_dir.name.lower()),

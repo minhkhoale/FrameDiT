@@ -3,6 +3,7 @@ import time
 import os
 from typing import Optional
 import subprocess
+import torch
 
 
 def file_size(path: Path) -> int:
@@ -76,3 +77,11 @@ def get_real_data_path(dataset_name: str) -> str:
         case _:
             raise ValueError(f"Unknown dataset name: {dataset_name}")
         
+
+def get_available_gpus():
+    gpu_list = []
+    if torch.cuda.is_available():
+        num_gpus = torch.cuda.device_count()
+        for i in range(num_gpus):
+            gpu_list.append(i)
+    return gpu_list
