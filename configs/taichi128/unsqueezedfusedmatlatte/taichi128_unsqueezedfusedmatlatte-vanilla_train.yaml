@@ -1,9 +1,9 @@
 # dataset
 dataset: "taichi"
 
-data_path: null
-latent_path: "/scratch/s224075134/temporal_diffusion/datasets/video/taichi_latent_16_kl_f8_autoencoder_flip/train"
-load_latent: True
+data_path: "/scratch/s224075134/temporal_diffusion/datasets/video/taichi/train"
+latent_path: 
+load_latent: False
 
 vae: "./configs/vae/autoencoder_kl.yaml"
 
@@ -11,7 +11,7 @@ vae: "./configs/vae/autoencoder_kl.yaml"
 results_dir: "./results"
 pretrained:
 # model config: 
-model: MatLatte-M/64-64/2
+model: UnsqueezedFusedMatLatte-M/2-vanilla
 num_frames: 16
 image_size: 128 # choices=[256, 512]
 in_channels: 4

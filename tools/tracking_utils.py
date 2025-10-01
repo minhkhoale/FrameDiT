@@ -22,7 +22,7 @@ def ensure_dirs(root: str) -> None:
     Path(root, 'processed_checkpoints.txt').touch()
 
 
-def wait_for_stable_file(path: Path, stable_wait: int = 15) -> None:
+def wait_for_stable_file(path: Path, stable_wait: int = 5) -> None:
     last = -1
     while True:
         cur = file_size(path)
@@ -74,6 +74,8 @@ def get_real_data_path(dataset_name: str) -> str:
     match dataset_name:
         case 'taichi128':
             return '/scratch/s224075134/temporal_diffusion/datasets/video_for_metrics/taichi128_reconstruction/train'
+        case 'taichi_img256':
+            return '/scratch/s224075134/temporal_diffusion/datasets/video/taichi-hd/taichi-256/frames/train'
         case _:
             raise ValueError(f"Unknown dataset name: {dataset_name}")
         

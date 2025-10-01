@@ -26,7 +26,7 @@ except:
 # from timm.models.layers.trace_utils import _assert
 
 def modulate(x, shift, scale):
-    return x * (1 + scale) + shift
+    return x * (1 + scale.unsqueeze(1)) + shift.unsqueeze(1)
 
 def matrix_mul(x, u, w):
     return torch.einsum('nm,...nd,dk->...mk', u, x, w)
@@ -64,6 +64,7 @@ class Attention(nn.Module):
         B, N, C = x.shape
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4).contiguous()
         q, k, v = qkv.unbind(0)   # make torchscript happy (cannot use tensor as tuple)
+
         if self.attention_mode == 'xformers': # cause loss nan while using with amp
             # https://github.com/facebookresearch/xformers/blob/e8bd8f932c2f48e3a3171d06749eecbbf1de420c/xformers/ops/fmha/__init__.py#L135
             q_xf = q.transpose(1,2).contiguous()
@@ -82,12 +83,16 @@ class Attention(nn.Module):
             attn = attn.softmax(dim=-1)
             attn = self.attn_drop(attn)
             x = (attn @ v).transpose(1, 2).reshape(B, N, C)
+
         else:
             raise NotImplemented
 
         x = self.proj(x)
         x = self.proj_drop(x)
         return x
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}(dim, num_heads={self.num_heads}, attention_mode={self.attention_mode})"
 
 
 class MatrixLinear(nn.Module):
@@ -251,6 +256,104 @@ class MatrixAttention(nn.Module):
         return x
 
 
+class FusedMatrixAttention(nn.Module):
+    def __init__(
+        self,
+        col_dim: int,
+        row_dim: int,
+        qk_col_dim: Optional[int] = None,
+        v_col_dim: Optional[int] = None,
+        num_col_heads: int = 4,
+        num_row_heads: int = 4,
+        attn_drop: float = 0.0,
+        proj_drop: float = 0.0,
+        use_bias=True,
+        bias_type='matrix',
+        u_type='param',
+        fuse_mode='gated',
+        attention_mode='math',
+    ):
+        """
+        Attention: local attention on rows
+        MatrixAttention: global attention on columns
+        """
+        super().__init__()
+        self.vanilla_attention = Attention(
+            dim=row_dim,
+            num_heads=num_row_heads,
+            qkv_bias=use_bias,
+            attention_mode=attention_mode,
+        )
+        
+        self.fuse_mode = fuse_mode
+        assert fuse_mode in ['gated', 'sum', 'concat', 'local'], f"Unknown fuse mode: {fuse_mode}"
+
+        if self.fuse_mode != 'local':
+            self.matrix_attention = MatrixAttention(
+                col_dim=col_dim,
+                row_dim=row_dim,
+                qk_col_dim=qk_col_dim,
+                v_col_dim=v_col_dim,
+                num_col_heads=num_col_heads,
+                num_row_heads=num_row_heads,
+                attn_drop=attn_drop,
+                proj_drop=proj_drop,
+                use_bias=use_bias,
+                bias_type=bias_type,
+                u_type=u_type,
+                attention_mode=attention_mode,
+            )
+            self.norm_local  = nn.LayerNorm(row_dim)
+            self.norm_global = nn.LayerNorm(row_dim)
+
+        if self.fuse_mode == 'gated':
+            self.alpha = nn.Parameter(torch.zeros(row_dim)) if fuse_mode else None
+            self.gamma_local  = nn.Parameter(1e-4 * torch.ones(row_dim))
+            self.gamma_global = nn.Parameter(1e-4 * torch.ones(row_dim))
+        elif self.fuse_mode == 'concat':
+            self.output_linear = nn.Linear(2 * row_dim, row_dim)
+    
+
+    def forward(self, x):
+        # x: (B, T, N, D)
+        B, T, N, D = x.shape
+        local_x = self.vanilla_attention(rearrange(x, 'B T N D -> (B N) T D'))
+        local_x = rearrange(local_x, '(B N) T D -> B T N D', B=B, N=N)
+        if self.fuse_mode == 'local':
+            return local_x
+
+        local_x = self.norm_local(local_x)
+        global_x = self.matrix_attention(x)
+        global_x = self.norm_global(global_x)
+
+        if self.fuse_mode == 'gated':
+            alpha = torch.sigmoid(self.alpha).view(1, 1, 1, D)
+            x = self.gamma_local.view(1,1,1,D) * local_x * alpha \
+              + self.gamma_global.view(1,1,1,D) * global_x * (1 - alpha)
+        elif self.fuse_mode == 'sum':
+            x = (local_x + global_x)*1/math.sqrt(2)
+        elif self.fuse_mode == 'concat':
+            x = torch.cat([local_x, global_x], dim=-1)
+            x = self.output_linear(x)
+        else:
+            raise NotImplementedError(f"Unknown fuse mode: {self.fuse_mode}")
+        return x
+    
+    def __repr__(self):
+        # return col_dim, row_dim, qk_col_dim, v_col_dim, num_col_heads, num_row_heads, fuse_mode, attention_mode
+        # newline for better readability
+        if self.fuse_mode == 'gated':
+            return f"{self.__class__.__name__}(col_dim={self.matrix_attention.col_dim}, row_dim={self.matrix_attention.row_dim}, qk_col_dim={self.matrix_attention.qk_col_dim}, v_col_dim={self.matrix_attention.v_col_dim},\n" \
+                   f" num_col_heads={self.matrix_attention.num_col_heads}, num_row_heads={self.matrix_attention.num_row_heads}, fuse_mode={self.fuse_mode}, attention_mode={self.vanilla_attention.attention_mode})"
+        elif self.fuse_mode == 'sum':
+            return f"{self.__class__.__name__}(col_dim={self.matrix_attention.col_dim}, row_dim={self.matrix_attention.row_dim}, qk_col_dim={self.matrix_attention.qk_col_dim}, v_col_dim={self.matrix_attention.v_col_dim},\n" \
+                   f" num_col_heads={self.matrix_attention.num_col_heads}, num_row_heads={self.matrix_attention.num_row_heads}, fuse_mode={self.fuse_mode}, attention_mode={self.vanilla_attention.attention_mode})"
+        elif self.fuse_mode == 'concat':
+            return f"{self.__class__.__name__}(col_dim={self.matrix_attention.col_dim}, row_dim={self.matrix_attention.row_dim}, qk_col_dim={self.matrix_attention.qk_col_dim}, v_col_dim={self.matrix_attention.v_col_dim},\n" \
+                   f" num_col_heads={self.matrix_attention.num_col_heads}, num_row_heads={self.matrix_attention.num_row_heads}, fuse_mode={self.fuse_mode}, attention_mode={self.vanilla_attention.attention_mode})"
+        elif self.fuse_mode == 'local':
+            return f"{self.__class__.__name__}(num_row_heads={self.vanilla_attention.num_heads}, attention_mode={self.vanilla_attention.attention_mode})"
+
 #################################################################################
 #               Embedding Layers for Timesteps and Class Labels                 #
 #################################################################################
@@ -328,12 +431,12 @@ class LabelEmbedder(nn.Module):
 
 
 #################################################################################
-#                                 Core MatLatte Model                                #
+#                                 Core UnsqueezedFusedMatLatte Model                                #
 #################################################################################
 
 class TransformerBlock(nn.Module):
     """
-    A MatLatte tansformer block with adaptive layer norm zero (adaLN-Zero) conditioning.
+    A UnsqueezedFusedMatLatte tansformer block with adaptive layer norm zero (adaLN-Zero) conditioning.
     """
     def __init__(self, hidden_size, num_heads, mlp_ratio=4.0, **block_kwargs):
         super().__init__()
@@ -349,13 +452,13 @@ class TransformerBlock(nn.Module):
         )
 
     def forward(self, x, c):
-        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=-1)
-        x = x + gate_msa * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
-        x = x + gate_mlp * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
+        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=1)
+        x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
+        x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
         return x
     
 
-class MatrixTransformerBlock(nn.Module):
+class FusedMatrixTransformerBlock(nn.Module):
     def __init__(
         self,
         hidden_size: int, 
@@ -370,7 +473,7 @@ class MatrixTransformerBlock(nn.Module):
         super().__init__()
         self.col_dim = col_dim
         self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.attn = MatrixAttention(
+        self.attn = FusedMatrixAttention(
             row_dim=hidden_size,
             col_dim=col_dim,
             qk_col_dim=qk_col_dim,
@@ -393,16 +496,16 @@ class MatrixTransformerBlock(nn.Module):
         x: (B*N, F, D)
         c: (B*N, F, D)
         """
-        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=-1)
+        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=1)
         attn_x = self.attn(rearrange(modulate(self.norm1(x), shift_msa, scale_msa), '(b n) f d -> b f n d', n=self.col_dim))
-        x = x + gate_msa * rearrange(attn_x, 'b f n d -> (b n) f d')
-        x = x + gate_mlp * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
+        x = x + gate_msa.unsqueeze(1) * rearrange(attn_x, 'b f n d -> (b n) f d')
+        x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
         return x
 
 
 class FinalLayer(nn.Module):
     """
-    The final layer of MatLatte.
+    The final layer of UnsqueezedFusedMatLatte.
     """
     def __init__(self, hidden_size, patch_size, out_channels):
         super().__init__()
@@ -414,13 +517,13 @@ class FinalLayer(nn.Module):
         )
 
     def forward(self, x, c):
-        shift, scale = self.adaLN_modulation(c).chunk(2, dim=-1)
+        shift, scale = self.adaLN_modulation(c).chunk(2, dim=1)
         x = modulate(self.norm_final(x), shift, scale)
         x = self.linear(x)
         return x
 
 
-class MatLatte(nn.Module):
+class UnsqueezedFusedMatLatte(nn.Module):
     """
     Diffusion model with a Transformer backbone.
     """
@@ -442,6 +545,7 @@ class MatLatte(nn.Module):
         learn_sigma=True,
         extras=1,
         attention_mode='math',
+        fuse_mode='gated',
         **kwargs
     ):
         super().__init__()
@@ -473,7 +577,7 @@ class MatLatte(nn.Module):
         self.hidden_size =  hidden_size
 
         _transformer_block = lambda: TransformerBlock(hidden_size, num_row_heads, mlp_ratio=mlp_ratio, attention_mode=attention_mode)
-        _mat_block = lambda: MatrixTransformerBlock(
+        _mat_block = lambda: FusedMatrixTransformerBlock(
             hidden_size=hidden_size,
             col_dim=self.n_tokens_per_frames, 
             qk_col_dim=qk_col_dim,
@@ -482,12 +586,17 @@ class MatLatte(nn.Module):
             num_row_heads=num_row_heads,
             u_type=kwargs.get('u_type', 'param'),
             bias_type=kwargs.get('bias_type', 'matrix'),
+            fuse_mode=fuse_mode,
         )
 
-        self.blocks = nn.ModuleList([
-            _transformer_block() if i % 2 == 0 else _mat_block() for i in range(depth)
+        if not kwargs.get('vanilla_transformer'):
+            self.blocks = nn.ModuleList([
+                _transformer_block() if i % 2 == 0 else _mat_block() for i in range(depth)
+            ])
+        else:
+            self.blocks = nn.ModuleList([
+                _transformer_block() for i in range(depth)
         ])
-
         self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
         self.initialize_weights()
 
@@ -574,17 +683,17 @@ class MatLatte(nn.Module):
         x = rearrange(x, 'b f c h w -> (b f) c h w')
         x = self.x_embedder(x) + self.pos_embed  
         t = self.t_embedder(t, use_fp16=use_fp16)                  
-        timestep_spatial = repeat(t, 'b d -> (b f) n d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1]) 
-        timestep_temp = repeat(t, 'b d -> (b n) f d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1])
+        timestep_spatial = repeat(t, 'n d -> (n c) d', c=self.temp_embed.shape[1]) 
+        timestep_temp = repeat(t, 'n d -> (n c) d', c=self.pos_embed.shape[1])
 
         if self.extras == 2:
             y = self.y_embedder(y, self.training)
-            y_spatial = repeat(y, 'b d -> (b f) n d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1])
-            y_temp = repeat(y, 'b d -> (b n) f d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1])
+            y_spatial = repeat(y, 'n d -> (n c) d', c=self.temp_embed.shape[1]) 
+            y_temp = repeat(y, 'n d -> (n c) d', c=self.pos_embed.shape[1])
         elif self.extras == 78:
             text_embedding = self.text_embedding_projection(text_embedding.reshape(batches, -1))
-            text_embedding_spatial = repeat(text_embedding, 'b d -> (b f) n d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1])
-            text_embedding_temp = repeat(text_embedding, 'b d -> (b n) f d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1])
+            text_embedding_spatial = repeat(text_embedding, 'n d -> (n c) d', c=self.temp_embed.shape[1])
+            text_embedding_temp = repeat(text_embedding, 'n d -> (n c) d', c=self.pos_embed.shape[1])
 
         for i in range(0, len(self.blocks), 2):
             spatial_block, temp_block = self.blocks[i:i+2]
@@ -596,7 +705,7 @@ class MatLatte(nn.Module):
                 c = timestep_spatial
             x  = spatial_block(x, c)
 
-            x = rearrange(x, '(b f) n d -> (b n) f d', b=batches)
+            x = rearrange(x, '(b f) t d -> (b t) f d', b=batches)
             # Add Time Embedding
             if i == 0:
                 x = x + self.temp_embed
@@ -609,7 +718,7 @@ class MatLatte(nn.Module):
                 c = timestep_temp
 
             x = temp_block(x, c)
-            x = rearrange(x, '(b n) f d -> (b f) n d', b=batches)
+            x = rearrange(x, '(b t) f d -> (b f) t d', b=batches)
 
         if self.extras == 2:
             c = timestep_spatial + y_spatial
@@ -727,237 +836,169 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
 # 256        | 8          | 16
 
 #============================================================================================
-def MatLatte_XL_2(**kwargs):
-    return MatLatte(depth=28, hidden_size=1152, patch_size=2, num_row_heads=16, **kwargs)
+def UnsqueezedFusedMatLatte_XL_2(**kwargs):
+    return UnsqueezedFusedMatLatte(depth=28, hidden_size=1152, patch_size=2, num_row_heads=16, **kwargs)
 
-def MatLatte_XL_4(**kwargs):
-    return MatLatte(depth=28, hidden_size=1152, patch_size=4, num_row_heads=16, **kwargs)
+def UnsqueezedFusedMatLatte_XL_4(**kwargs):
+    return UnsqueezedFusedMatLatte(depth=28, hidden_size=1152, patch_size=4, num_row_heads=16, **kwargs)
 
-def MatLatte_XL_8(**kwargs):
-    return MatLatte(depth=28, hidden_size=1152, patch_size=8, num_row_heads=16, **kwargs)
+def UnsqueezedFusedMatLatte_XL_8(**kwargs):
+    return UnsqueezedFusedMatLatte(depth=28, hidden_size=1152, patch_size=8, num_row_heads=16, **kwargs)
 
-def MatLatte_L_2(**kwargs):
-    return MatLatte(depth=24, hidden_size=1024, patch_size=2, num_row_heads=16, **kwargs)
+def UnsqueezedFusedMatLatte_L_2(**kwargs):
+    return UnsqueezedFusedMatLatte(depth=24, hidden_size=1024, patch_size=2, num_row_heads=16, **kwargs)
 
-def MatLatte_L_4(**kwargs):
-    return MatLatte(depth=24, hidden_size=1024, patch_size=4, num_row_heads=16, **kwargs)
+def UnsqueezedFusedMatLatte_L_4(**kwargs):
+    return UnsqueezedFusedMatLatte(depth=24, hidden_size=1024, patch_size=4, num_row_heads=16, **kwargs)
 
-def MatLatte_L_8(**kwargs):
-    return MatLatte(depth=24, hidden_size=1024, patch_size=8, num_row_heads=16, **kwargs)
+def UnsqueezedFusedMatLatte_L_8(**kwargs):
+    return UnsqueezedFusedMatLatte(depth=24, hidden_size=1024, patch_size=8, num_row_heads=16, **kwargs)
 
-def MatLatte_M_2(**kwargs):
-    return MatLatte(depth=12, hidden_size=1024, patch_size=2, num_row_heads=16, **kwargs)
+def UnsqueezedFusedMatLatte_M_2(**kwargs):
+    return UnsqueezedFusedMatLatte(depth=12, hidden_size=1024, patch_size=2, num_row_heads=16, **kwargs)
 
-def MatLatte_M_4(**kwargs):
-    return MatLatte(depth=12, hidden_size=1024, patch_size=4, num_row_heads=16, **kwargs)
+def UnsqueezedFusedMatLatte_M_4(**kwargs):
+    return UnsqueezedFusedMatLatte(depth=12, hidden_size=1024, patch_size=4, num_row_heads=16, **kwargs)
 
-def MatLatte_M_8(**kwargs):
-    return MatLatte(depth=12, hidden_size=1024, patch_size=8, num_row_heads=16, **kwargs)
+def UnsqueezedFusedMatLatte_M_8(**kwargs):
+    return UnsqueezedFusedMatLatte(depth=12, hidden_size=1024, patch_size=8, num_row_heads=16, **kwargs)
 
-def MatLatte_B_2(**kwargs):
-    return MatLatte(depth=12, hidden_size=768, patch_size=2, num_row_heads=12, **kwargs)
+def UnsqueezedFusedMatLatte_B_2(**kwargs):
+    return UnsqueezedFusedMatLatte(depth=12, hidden_size=768, patch_size=2, num_row_heads=12, **kwargs)
 
-def MatLatte_B_4(**kwargs):
-    return MatLatte(depth=12, hidden_size=768, patch_size=4, num_row_heads=12, **kwargs)
+def UnsqueezedFusedMatLatte_B_4(**kwargs):
+    return UnsqueezedFusedMatLatte(depth=12, hidden_size=768, patch_size=4, num_row_heads=12, **kwargs)
 
-def MatLatte_B_8(**kwargs):
-    return MatLatte(depth=12, hidden_size=768, patch_size=8, num_row_heads=12, **kwargs)
+def UnsqueezedFusedMatLatte_B_8(**kwargs):
+    return UnsqueezedFusedMatLatte(depth=12, hidden_size=768, patch_size=8, num_row_heads=12, **kwargs)
 
-def MatLatte_S_2(**kwargs):
-    return MatLatte(depth=12, hidden_size=384, patch_size=2, num_row_heads=6, **kwargs)
+def UnsqueezedFusedMatLatte_S_2(**kwargs):
+    return UnsqueezedFusedMatLatte(depth=12, hidden_size=384, patch_size=2, num_row_heads=6, **kwargs)
 
-def MatLatte_S_4(**kwargs):
-    return MatLatte(depth=12, hidden_size=384, patch_size=4, num_row_heads=6, **kwargs)
+def UnsqueezedFusedMatLatte_S_4(**kwargs):
+    return UnsqueezedFusedMatLatte(depth=12, hidden_size=384, patch_size=4, num_row_heads=6, **kwargs)
 
-def MatLatte_S_8(**kwargs):
-    return MatLatte(depth=12, hidden_size=384, patch_size=8, num_row_heads=6, **kwargs)
+def UnsqueezedFusedMatLatte_S_8(**kwargs):
+    return UnsqueezedFusedMatLatte(depth=12, hidden_size=384, patch_size=8, num_row_heads=6, **kwargs)
 
 # For image size 256
-def MatLatte_XL_64_512_2(**kwargs):
-    return MatLatte_XL_2(qk_col_dim=64, v_col_dim=512, num_col_heads=64, **kwargs)
+def UnsqueezedFusedMatLatte_XL_64_512_2(**kwargs):
+    return UnsqueezedFusedMatLatte_XL_2(qk_col_dim=64, v_col_dim=512, num_col_heads=64, **kwargs)
 
-def MatLatte_XL_128_512_2(**kwargs):
-    return MatLatte_XL_2(qk_col_dim=128, v_col_dim=512, num_col_heads=128, **kwargs)
+def UnsqueezedFusedMatLatte_XL_128_512_2(**kwargs):
+    return UnsqueezedFusedMatLatte_XL_2(qk_col_dim=128, v_col_dim=512, num_col_heads=128, **kwargs)
 
-def MatLatte_XL_128_1024_2(**kwargs):
-    return MatLatte_XL_2(qk_col_dim=128, v_col_dim=1024, num_col_heads=128, **kwargs)
+def UnsqueezedFusedMatLatte_XL_128_1024_2(**kwargs):
+    return UnsqueezedFusedMatLatte_XL_2(qk_col_dim=128, v_col_dim=1024, num_col_heads=128, **kwargs)
 
-def MatLatte_XL_256_256_2(**kwargs):
-    return MatLatte_XL_2(qk_col_dim=256, v_col_dim=256, num_col_heads=256, **kwargs)
+def UnsqueezedFusedMatLatte_XL_256_256_2(**kwargs):
+    return UnsqueezedFusedMatLatte_XL_2(qk_col_dim=256, v_col_dim=256, num_col_heads=256, **kwargs)
 
-def MatLatte_XL_256_512_2(**kwargs):
-    return MatLatte_XL_2(qk_col_dim=256, v_col_dim=512, num_col_heads=256, **kwargs)
+def UnsqueezedFusedMatLatte_XL_256_512_2(**kwargs):
+    return UnsqueezedFusedMatLatte_XL_2(qk_col_dim=256, v_col_dim=512, num_col_heads=256, **kwargs)
 
 # For image size 128, 64 tokens per frame
-def MatLatte_M_1_256_2(**kwargs):
-    return MatLatte_M_2(qk_col_dim=1, v_col_dim=256, num_col_heads=1, **kwargs)
+def UnsqueezedFusedMatLatte_M_1_256_2(**kwargs):
+    return UnsqueezedFusedMatLatte_M_2(qk_col_dim=1, v_col_dim=256, num_col_heads=1, **kwargs)
 
-def MatLatte_M_4_256_2(**kwargs):
-    return MatLatte_M_2(qk_col_dim=4, v_col_dim=256, num_col_heads=4, **kwargs)
+def UnsqueezedFusedMatLatte_M_4_256_2(**kwargs):
+    return UnsqueezedFusedMatLatte_M_2(qk_col_dim=4, v_col_dim=256, num_col_heads=4, **kwargs)
 
-def MatLatte_M_4_512_2(**kwargs):
-    return MatLatte_M_2(qk_col_dim=4, v_col_dim=512, num_col_heads=4, **kwargs)
+def UnsqueezedFusedMatLatte_M_4_512_2(**kwargs):
+    return UnsqueezedFusedMatLatte_M_2(qk_col_dim=4, v_col_dim=512, num_col_heads=4, **kwargs)
 
-def MatLatte_M_8_256_2(**kwargs):
-    return MatLatte_M_2(qk_col_dim=8, v_col_dim=256, num_col_heads=8, **kwargs)
+def UnsqueezedFusedMatLatte_M_8_256_2(**kwargs):
+    return UnsqueezedFusedMatLatte_M_2(qk_col_dim=8, v_col_dim=256, num_col_heads=8, **kwargs)
 
-def MatLatte_M_16_512_2(**kwargs):
-    return MatLatte_M_2(qk_col_dim=16, v_col_dim=512, num_col_heads=16, **kwargs)
+def UnsqueezedFusedMatLatte_M_16_512_2(**kwargs):
+    return UnsqueezedFusedMatLatte_M_2(qk_col_dim=16, v_col_dim=512, num_col_heads=16, **kwargs)
 
-def MatLatte_M_16_256_2(**kwargs):
-    return MatLatte_M_2(qk_col_dim=16, v_col_dim=256, num_col_heads=16, **kwargs)
+def UnsqueezedFusedMatLatte_M_16_256_2(**kwargs):
+    return UnsqueezedFusedMatLatte_M_2(qk_col_dim=16, v_col_dim=256, num_col_heads=16, **kwargs)
 
-def MatLatte_M_16_256_2(**kwargs):
-    return MatLatte_M_2(qk_col_dim=16, v_col_dim=256, num_col_heads=16, **kwargs)
+def UnsqueezedFusedMatLatte_M_16_256_2(**kwargs):
+    return UnsqueezedFusedMatLatte_M_2(qk_col_dim=16, v_col_dim=256, num_col_heads=16, **kwargs)
 
 
-def MatLatte_M_16_64_2(**kwargs):
-    return MatLatte_M_2(qk_col_dim=16, v_col_dim=64, num_col_heads=16, **kwargs)
+# def UnsqueezedFusedMatLatte_M_16_64_2(**kwargs):
+#     return UnsqueezedFusedMatLatte_M_2(qk_col_dim=16, v_col_dim=64, num_col_heads=16, **kwargs)
 
-def MatLatte_M_32_256_2(**kwargs):
-    return MatLatte_M_2(qk_col_dim=32, v_col_dim=256, num_col_heads=32, **kwargs)
+def UnsqueezedFusedMatLatte_M_32_256_2(**kwargs):
+    return UnsqueezedFusedMatLatte_M_2(qk_col_dim=32, v_col_dim=256, num_col_heads=32, **kwargs)
 
-def MatLatte_M_64_64_2(**kwargs):
-    return MatLatte_M_2(qk_col_dim=64, v_col_dim=64, num_col_heads=64, **kwargs)
+def UnsqueezedFusedMatLatte_M_64_64_2(**kwargs):
+    return UnsqueezedFusedMatLatte_M_2(qk_col_dim=64, v_col_dim=64, num_col_heads=64, **kwargs)
 
-def MatLatte_M_64_256_2(**kwargs):
-    return MatLatte_M_2(qk_col_dim=64, v_col_dim=256, num_col_heads=64, **kwargs)
+def UnsqueezedFusedMatLatte_M_64_256_2_gated(**kwargs):
+    return UnsqueezedFusedMatLatte_M_2(qk_col_dim=64, v_col_dim=256, num_col_heads=64, fuse_mode='gated', **kwargs)
 
-def MatLatte_M_64_64_2_identity_u(**kwargs):
-    return MatLatte_M_2(qk_col_dim=64, v_col_dim=64, num_col_heads=64, u_type='identity', **kwargs)
+def UnsqueezedFusedMatLatte_M_64_256_2_concat(**kwargs):
+    return UnsqueezedFusedMatLatte_M_2(qk_col_dim=64, v_col_dim=256, num_col_heads=64, fuse_mode='concat', **kwargs)
 
-def MatLatte_M_64_64_2_identity_u_row_bias(**kwargs):
-    return MatLatte_M_2(qk_col_dim=64, v_col_dim=64, num_col_heads=64, u_type='identity', bias_type='row', **kwargs)
+def UnsqueezedFusedMatLatte_M_64_256_2_sum(**kwargs):
+    return UnsqueezedFusedMatLatte_M_2(qk_col_dim=64, v_col_dim=256, num_col_heads=64, fuse_mode='sum', **kwargs)
 
-def MatLatte_M_64_64_2_softmax_u(**kwargs):
-    return MatLatte_M_2(qk_col_dim=64, v_col_dim=64, num_col_heads=64, u_type='softmax', **kwargs)
+def UnsqueezedFusedMatLatte_M_16_64_2_gated(**kwargs):
+    return UnsqueezedFusedMatLatte_M_2(qk_col_dim=16, v_col_dim=64, num_col_heads=16, fuse_mode='gated', **kwargs)
 
-def MatLatte_M_64_256_2_softmax_u(**kwargs):
-    return MatLatte_M_2(qk_col_dim=64, v_col_dim=256, num_col_heads=64, u_type='softmax', **kwargs)
+def UnsqueezedFusedMatLatte_M_16_64_2_concat(**kwargs):
+    return UnsqueezedFusedMatLatte_M_2(qk_col_dim=16, v_col_dim=64, num_col_heads=16, fuse_mode='concat', **kwargs)
 
-def MatLatte_M_64_64_2_normalized_l1_u(**kwargs):
-    return MatLatte_M_2(qk_col_dim=64, v_col_dim=64, num_col_heads=64, u_type='normalized_l1', **kwargs)
+def UnsqueezedFusedMatLatte_M_16_64_2_sum(**kwargs):
+    return UnsqueezedFusedMatLatte_M_2(qk_col_dim=16, v_col_dim=64, num_col_heads=16, fuse_mode='sum', **kwargs)
 
-def MatLatte_M_64_64_2_normalized_l2_u(**kwargs):
-    return MatLatte_M_2(qk_col_dim=64, v_col_dim=64, num_col_heads=64, u_type='normalized_l2', **kwargs)
+def UnsqueezedFusedMatLatte_M_4_64_2_concat(**kwargs):
+    return UnsqueezedFusedMatLatte_M_2(qk_col_dim=4, v_col_dim=64, num_col_heads=4, fuse_mode='concat', **kwargs)
 
-def MatLatte_M_64_256_2_normalized_l1_u(**kwargs):
-    return MatLatte_M_2(qk_col_dim=64, v_col_dim=256, num_col_heads=64, u_type='normalized_l1', **kwargs)
+def UnsqueezedFusedMatLatte_M_2_onlylocal(**kwargs):
+    return UnsqueezedFusedMatLatte_M_2(qk_col_dim=None, v_col_dim=None, num_col_heads=None, fuse_mode='local', **kwargs)
 
-def MatLatte_M_64_256_2_normalized_l2_u(**kwargs):
-    return MatLatte_M_2(qk_col_dim=64, v_col_dim=256, num_col_heads=64, u_type='normalized_l2', **kwargs)
-
-def MatLatte_M_64_256_2_row_bias(**kwargs):
-    return MatLatte_M_2(qk_col_dim=64, v_col_dim=256, num_col_heads=64, bias_type='row', **kwargs)
+def UnsqueezedFusedMatLatte_M_2_vanilla(**kwargs):
+    return UnsqueezedFusedMatLatte_M_2(qk_col_dim=None, v_col_dim=None, num_col_heads=None, vanilla_transformer=True, **kwargs)
 
 # For image size 64
-def MatLatte_B_16_16_2(**kwargs):
-    return MatLatte_B_2(qk_col_dim=16, v_col_dim=16, num_col_heads=16, **kwargs)
+def UnsqueezedFusedMatLatte_B_16_16_2(**kwargs):
+    return UnsqueezedFusedMatLatte_B_2(qk_col_dim=16, v_col_dim=16, num_col_heads=16, **kwargs)
 
 #============================================================================================
-MatLatte_models = {
-    'MatLatte-B/16-16/2': MatLatte_B_16_16_2,
-    'MatLatte-M/1-256/2': MatLatte_M_1_256_2,
-    'MatLatte-M/4-256/2': MatLatte_M_4_256_2, 'MatLatte-M/4-512/2': MatLatte_M_4_512_2, 
-    'MatLatte-M/8-256/2': MatLatte_M_8_256_2, 
-    'MatLatte-M/16-64/2': MatLatte_M_16_64_2, 'MatLatte-M/16-256/2': MatLatte_M_16_256_2, 'MatLatte-M/16-512/2': MatLatte_M_16_512_2,
-    'MatLatte-M/32-256/2': MatLatte_M_32_256_2,
-    'MatLatte-M/64-64/2': MatLatte_M_64_64_2, 'MatLatte-M/64-256/2': MatLatte_M_64_256_2,
-    
-    'MatLatte-M/64-64/2-identity-u': MatLatte_M_64_64_2_identity_u, 'MatLatte-M/64-64/2-identity-u-row-bias': MatLatte_M_64_64_2_identity_u_row_bias,
-    
-    'MatLatte-M/64-64/2-softmax-u': MatLatte_M_64_64_2_softmax_u, 'MatLatte-M/64-256/2-softmax-u': MatLatte_M_64_256_2_softmax_u,
-    'MatLatte-M/64-64/2-normalized-l1-u': MatLatte_M_64_64_2_normalized_l1_u, 'MatLatte-M/64-64/2-normalized-l2-u': MatLatte_M_64_64_2_normalized_l2_u,
-    'MatLatte-M/64-256/2-normalized-l1-u': MatLatte_M_64_256_2_normalized_l1_u, 'MatLatte-M/64-256/2-normalized-l2-u': MatLatte_M_64_256_2_normalized_l2_u,
-    'MatLatte-M/64-256/2-row-bias': MatLatte_M_64_256_2_row_bias,
-    'MatLatte-XL/64-512/2': MatLatte_XL_64_512_2, 'MatLatte-XL/128-512/2': MatLatte_XL_128_512_2, 'MatLatte-XL/256-256/2': MatLatte_XL_256_256_2,
-    'MatLatte-XL/128-1024/2': MatLatte_XL_128_1024_2, 'MatLatte-XL/256-512/2': MatLatte_XL_256_512_2
+UnsqueezedFusedMatLatte_models = {
+    'UnsqueezedFusedMatLatte-M/4-64/2-concat': UnsqueezedFusedMatLatte_M_4_64_2_concat,
+    'UnsqueezedFusedMatLatte-M/16-64/2-gated': UnsqueezedFusedMatLatte_M_16_64_2_gated,
+    'UnsqueezedFusedMatLatte-M/16-64/2-concat': UnsqueezedFusedMatLatte_M_16_64_2_concat,
+    'UnsqueezedFusedMatLatte-M/16-64/2-sum': UnsqueezedFusedMatLatte_M_16_64_2_sum,
+    'UnsqueezedFusedMatLatte-M/64-256/2-gated': UnsqueezedFusedMatLatte_M_64_256_2_gated,
+    'UnsqueezedFusedMatLatte-M/64-256/2-concat': UnsqueezedFusedMatLatte_M_64_256_2_concat,
+    'UnsqueezedFusedMatLatte-M/64-256/2-sum': UnsqueezedFusedMatLatte_M_64_256_2_sum,
+    'UnsqueezedFusedMatLatte-M/2-onlylocal': UnsqueezedFusedMatLatte_M_2_onlylocal,
+    'UnsqueezedFusedMatLatte-M/2-vanilla': UnsqueezedFusedMatLatte_M_2_vanilla,
 }
 
-def test_matrix_vs_vanilla():
-    B, T, N, D = 2, 5, 4, 16  # small sizes
-    num_row_heads = 4
-    # To make qk_head_col_dim == 1, set qk_col_dim = col_dim = N and num_col_heads = N
-    col_dim = N
-    qk_col_dim = col_dim
-    v_col_dim = col_dim
-    num_col_heads = col_dim
-    num_row_heads = num_row_heads
-
-    # vanilla Attention expects input shape (B*T*N, D) or similar depending on your Attention wrapper,
-    # but we'll just test matrix attention vs an explicit construction below.
-
-    # Create MatrixAttention
-    mat_attn = MatrixAttention(
-        col_dim=col_dim,
-        row_dim=D,
-        qk_col_dim=qk_col_dim,
-        v_col_dim=v_col_dim,
-        num_col_heads=num_col_heads,
-        num_row_heads=num_row_heads,
-        u_type='identity',
-        bias_type='row',
-        attention_mode='math'
-    )
-
-    # Build an equivalent vanilla Attention: we will emulate q,k,v linear as single Linear with same weights
-    # Create three linear layers and one out proj
-    total_dim = D
-    vanilla = Attention(dim=total_dim, num_heads=num_row_heads * num_col_heads, qkv_bias=True, attention_mode='math')
-
-    # Now copy weights: derive equivalent matrices
-    # For identity-u case, MatrixLinear effectively applies w: (row_dim -> out_col_dim)
-    # We'll extract w parameters from mat_attn.linear_q.w etc and assemble qkv weight for vanilla
-    with torch.no_grad():
-        # Build q, k, v by applying MatrixLinear to input shape (..., col_dim, row_dim)
-        # But we want a single linear that maps flattened token vector of size D -> D (per head layout).
-        # We'll approximate equivalence by generating random input and matching outputs; simpler: test by
-        # generating random input and comparing outputs from mat_attn and a wrapper that applies equivalent per-token linears.
-
-        x = torch.randn(B, T, N, D)
-
-        out_mat = mat_attn(x)  # (B, T, N, D)
-
-        # Now compute q,k,v with explicit per-token linear: for identity-u MatrixLinear reduces to applying w to last dim:
-        def per_col_linear(matlinear, inp):
-            # matlinear.w shape (in_row_dim, out_row_dim)
-            w = matlinear.w  # shape (row_dim, out_row_dim)
-            b = matlinear.bias  # if row bias, shape (1, out_row_dim) or None
-            # inp shape (..., col_dim, row_dim)
-            # We want output (..., out_col_dim, out_row_dim)
-            # For identity-u, output[..., m, k] = sum_d inp[..., m, d] * w[d,k] + b
-            out = torch.einsum('...md,dk->...mk', inp, w)
-            if b is not None:
-                out = out + b.view(1,1,-1)  # broadcasting
-            return out
-
-        q_test = per_col_linear(mat_attn.linear_q, x)  # (B,T,qk_col_dim,row_dim)
-        k_test = per_col_linear(mat_attn.linear_k, x)
-        v_test = per_col_linear(mat_attn.linear_v, x)
-
-        # Now reshape q_test like mat_attn does:
-        q_test_rs = rearrange(q_test, 'B T (C N) (R D) -> B (C R) T (N D)',
-                              C=num_col_heads, R=num_row_heads, N=1, D=D//num_row_heads)
-        k_test_rs = rearrange(k_test, 'B T (C N) (R D) -> B (C R) T (N D)',
-                              C=num_col_heads, R=num_row_heads, N=1, D=D//num_row_heads)
-        v_test_rs = rearrange(v_test, 'B T (C N) (R D) -> B (C R) T (N D)',
-                              C=num_col_heads, R=num_row_heads, N=1, D=D//num_row_heads)
-
-        # Compute attention math equivalent:
-        scale = ( (qk_col_dim // num_col_heads) * (D // num_row_heads) ) ** -0.5
-        attn_scores = (q_test_rs @ k_test_rs.transpose(-2,-1)) * scale
-        attn_probs = torch.softmax(attn_scores, dim=-1)
-        out = (attn_probs @ v_test_rs)
-        out_rearr = rearrange(out, 'B (C R) T (N D) -> B T (C N) (R D)', C=num_col_heads, R=num_row_heads, N=1, D=D//num_row_heads)
-
-        # Project back with proj_v
-        proj_out = per_col_linear(mat_attn.proj_v, out_rearr)
-
-        # Now proj_out should equal mat_attn(x)
-        print("max abs diff:", (proj_out - out_mat).abs().max().item())
-        assert torch.allclose(proj_out, out_mat, atol=1e-5), "Not equal!"
-
-    print("MatrixAttention (identity u, row bias) matches the manual expansion (within tol).")
+    # 'UnsqueezedFusedMatLatte-B/16-16/2': UnsqueezedFusedMatLatte_B_16_16_2,
+    # 'UnsqueezedFusedMatLatte-M/1-256/2': UnsqueezedFusedMatLatte_M_1_256_2,
+    # 'UnsqueezedFusedMatLatte-M/4-256/2': UnsqueezedFusedMatLatte_M_4_256_2, 'UnsqueezedFusedMatLatte-M/4-512/2': UnsqueezedFusedMatLatte_M_4_512_2, 
+    # 'UnsqueezedFusedMatLatte-M/8-256/2': UnsqueezedFusedMatLatte_M_8_256_2, 
+    # 'UnsqueezedFusedMatLatte-M/16-64/2': UnsqueezedFusedMatLatte_M_16_64_2, 'UnsqueezedFusedMatLatte-M/16-256/2': UnsqueezedFusedMatLatte_M_16_256_2, 'UnsqueezedFusedMatLatte-M/16-512/2': UnsqueezedFusedMatLatte_M_16_512_2,
+    # 'UnsqueezedFusedMatLatte-M/32-256/2': UnsqueezedFusedMatLatte_M_32_256_2,
+    # 'UnsqueezedFusedMatLatte-M/64-64/2': UnsqueezedFusedMatLatte_M_64_64_2, 'UnsqueezedFusedMatLatte-M/64-256/2': UnsqueezedFusedMatLatte_M_64_256_2,
+    # 'UnsqueezedFusedMatLatte-XL/64-512/2': UnsqueezedFusedMatLatte_XL_64_512_2, 'UnsqueezedFusedMatLatte-XL/128-512/2': UnsqueezedFusedMatLatte_XL_128_512_2, 'UnsqueezedFusedMatLatte-XL/256-256/2': UnsqueezedFusedMatLatte_XL_256_256_2,
+    # 'UnsqueezedFusedMatLatte-XL/128-1024/2': UnsqueezedFusedMatLatte_XL_128_1024_2, 'UnsqueezedFusedMatLatte-XL/256-512/2': UnsqueezedFusedMatLatte_XL_256_512_2
 
 if __name__ == '__main__':
-    test_matrix_vs_vanilla()
+
+    import torch
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    img = torch.randn(3, 16, 4, 32, 32).to(device)
+    t = torch.tensor([1, 2, 3]).to(device)
+    y = torch.tensor([1, 2, 3]).to(device)
+    network = UnsqueezedFusedMatLatte_XL_2().to(device)
+    from thop import profile 
+    flops, params = profile(network, inputs=(img, t))
+    print('FLOPs = ' + str(flops/1000**3) + 'G')
+    print('Params = ' + str(params/1000**2) + 'M')
+    # y_embeder = LabelEmbedder(num_classes=101, hidden_size=768, dropout_prob=0.5).to(device)
+    # lora.mark_only_lora_as_trainable(network)
+    # out = y_embeder(y, True)
+    # out = network(img, t, y)
+    # print(out.shape)

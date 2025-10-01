@@ -2,9 +2,10 @@
 #SBATCH --qos=batch-short
 #SBATCH --job-name=Taichi128_MatLatte-64-256
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=4
-#SBATCH --gpus=4
-#SBATCH --constraint=gpu-v100
+#SBATCH --partition=gpu-large
+#SBATCH --ntasks-per-node=2
+#SBATCH --gpus=2
+#SBATCH --constraint=gpu-h100
 #SBATCH --mem=64GB
 #SBATCH --cpus-per-task=6
 #SBATCH --time=120:00:00

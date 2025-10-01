@@ -17,7 +17,6 @@ import io
 import os
 import math
 import argparse
-from pprint import pprint
 
 import torch.distributed as dist
 from glob import glob
@@ -47,10 +46,6 @@ os.environ['TORCH_DISTRIBUTED_DEBUG'] = 'DETAIL'
 #################################################################################
 #                                  Training Loop                                #
 #################################################################################
-BIN_EDGES = [0, 200, 400, 600, 800, 1000]
-BIN_LABELS = ["0-199", "200-399", "400-599", "600-799", "800-999"]
-NUM_BINS = 5
-
 
 def main(args):
 
@@ -103,7 +98,6 @@ def main(args):
     sample_size = args.image_size // 8
     args.latent_size = sample_size
     model = get_models(args)
-    logger.info(f'Model {model}')
     
     diffusion = create_diffusion(
         timestep_respacing=None,
@@ -117,9 +111,6 @@ def main(args):
     logger.info(f'diffusion {diffusion}')
 
     vae = get_vae(OmegaConf.load(args.vae)).to(device)
-
-    args.diff_scaler = float(args.diff_scaler) if 'diff_scaler' in args else 1.0
-    logger.info(f'Using difference scaler: {args.diff_scaler}')
 
     # # use pretrained model?
     if args.pretrained:
@@ -207,11 +198,6 @@ def main(args):
         "xs_vb": 0,
         "diff_vb": 0,
     }
-    running_bins = {
-        "x_loss_sum":  [0.0] * NUM_BINS,
-        "dx_loss_sum": [0.0] * NUM_BINS,
-        "count":       [0.0] * NUM_BINS,
-    }
 
     first_epoch = 0
     start_time = time()
@@ -252,10 +238,11 @@ def main(args):
             if not args.load_latent:
                 x = encode_video(vae, x)  # (B,F,C,H,W)
             x = x.mul_(vae.scaler)
-            
+
             # Get difference
-            dx = get_difference(x, padding=True)
-            dx = dx.mul_(args.diff_scaler) 
+            dx = torch.zeros_like(x, dtype=x.dtype)
+            #TODO: add diff norm
+            # x = interleave_frames(x, diff)
 
             # TODO: add condition for action dataset
             if args.extras == 78: # text-to-video
@@ -294,22 +281,6 @@ def main(args):
             running_metrics["diff_mse"] += loss_dict['dx_mse'].mean().item() / args.gradient_accumulation_steps if 'dx_mse' in loss_dict else 0.0
             running_metrics["diff_loss"] += loss_dict['dx_loss'].mean().item() / args.gradient_accumulation_steps if 'dx_loss' in loss_dict else 0.0
 
-            # track bins
-            with torch.no_grad():
-                x_loss_ps  = loss_dict.get('x_loss',  None)
-                dx_loss_ps = loss_dict.get('dx_loss', None)
-                if (x_loss_ps is not None) and (dx_loss_ps is not None):
-                    for i in range(NUM_BINS):
-                        lo, hi = BIN_EDGES[i], BIN_EDGES[i+1]
-                        mask = (t >= lo) & (t < hi)
-                        if mask.any():
-                            # Sum the masked losses (as floats), and count
-                            running_bins["x_loss_sum"][i]  += x_loss_ps[mask].sum().item() / args.gradient_accumulation_steps
-                            running_bins["dx_loss_sum"][i] += dx_loss_ps[mask].sum().item() / args.gradient_accumulation_steps
-                            running_bins["count"][i]       += mask.sum().item()
-
-                
-
             # Logging
             log_steps += 1
             train_steps += 1
@@ -328,18 +299,6 @@ def main(args):
 
                 logger.info(f"(step={train_steps:07d}/epoch={epoch:04d}) Loss: {reduced_metrics['loss']:.4f}, xs_loss: {reduced_metrics['xs_loss']:.4f}, diff_loss: {reduced_metrics['diff_loss']:.4f}, Gradient Norm: {gradient_norm:.4f}, Train Steps/Sec: {steps_per_sec:.2f}")
 
-                # bin
-                x_sums  = torch.tensor(running_bins["x_loss_sum"],  device=device, dtype=torch.float64)
-                dx_sums = torch.tensor(running_bins["dx_loss_sum"], device=device, dtype=torch.float64)
-                counts  = torch.tensor(running_bins["count"],       device=device, dtype=torch.float64)
-                dist.all_reduce(x_sums,  op=dist.ReduceOp.SUM)
-                dist.all_reduce(dx_sums, op=dist.ReduceOp.SUM)
-                dist.all_reduce(counts,  op=dist.ReduceOp.SUM)
-
-                eps = 1e-12
-                x_means  = (x_sums  / (counts + eps)).tolist()
-                dx_means = (dx_sums / (counts + eps)).tolist()
-
                 if wandb.run is not None:
                     logging_dict = {
                         "train/loss": reduced_metrics['loss'],
@@ -349,22 +308,11 @@ def main(args):
                         if v != 0:
                             logging_dict[f"train/{k}"] = v
 
-                    for i, lbl in enumerate(BIN_LABELS):
-                        if counts[i] > 0:
-                            logging_dict[f"train/bin_xs_loss/{lbl}"]  = x_means[i]
-                            logging_dict[f"train/bin_dx_loss/{lbl}"] = dx_means[i]
-
                     wandb.log(logging_dict, step=train_steps)
 
                 # Reset monitoring variables:
                 for k in running_metrics:
                     running_metrics[k] = 0.0
-                
-                running_bins = {
-                    "x_loss_sum":  [0.0] * NUM_BINS,
-                    "dx_loss_sum": [0.0] * NUM_BINS,
-                    "count":       [0.0] * NUM_BINS,
-                }
 
                 log_steps = 0
                 start_time = time()

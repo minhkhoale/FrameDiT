@@ -351,7 +351,7 @@ def main(args):
 
                     for i, lbl in enumerate(BIN_LABELS):
                         if counts[i] > 0:
-                            logging_dict[f"train/bin_xs_loss/{lbl}"]  = x_means[i]
+                            logging_dict[f"train/bin_x_loss/{lbl}"]  = x_means[i]
                             logging_dict[f"train/bin_dx_loss/{lbl}"] = dx_means[i]
 
                     wandb.log(logging_dict, step=train_steps)
@@ -360,11 +360,11 @@ def main(args):
                 for k in running_metrics:
                     running_metrics[k] = 0.0
                 
-                running_bins = {
-                    "x_loss_sum":  [0.0] * NUM_BINS,
-                    "dx_loss_sum": [0.0] * NUM_BINS,
-                    "count":       [0.0] * NUM_BINS,
-                }
+                    running_bins = {
+                        "x_loss_sum":  [0.0] * NUM_BINS,
+                        "dx_loss_sum": [0.0] * NUM_BINS,
+                        "count":       [0.0] * NUM_BINS,
+                    }
 
                 log_steps = 0
                 start_time = time()

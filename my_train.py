@@ -84,6 +84,8 @@ def main(args):
 
         gaussian_name = args.diffusion_name if 'diffusion_name' in args else None
         experiment_name = f"{experiment_index:03d}-{model_string_name}-{num_frame_string}-{args.dataset}{args.image_size}"
+        if not args.load_latent:
+            experiment_name += "-novae"
         if gaussian_name is not None:
             experiment_name += f"-{gaussian_name}"
 
@@ -98,7 +100,11 @@ def main(args):
         logger.info(f"Experiment directory created at {experiment_dir}")
 
         project = "debug" if args.debug and args.project is not None else args.project
-        wandb.init(project=project, name=experiment_name, tags=['video_generation', model_string_name, f"{args.dataset}{args.image_size}", "training"]) if args.project else None
+
+        if hasattr(args, "run_id") and args.run_id is not None:
+            wandb.init(project=project, id=args.run_id, resume="must") if args.project else None
+        else:
+            wandb.init(project=project, name=experiment_name, tags=['video_generation', model_string_name, f"{args.dataset}{args.image_size}", "training"]) if args.project else None
     else:
         logger = create_logger(None)
         # tb_writer = None
@@ -155,6 +161,7 @@ def main(args):
     model = DDP(model.to(device), device_ids=[local_rank])
 
     logger.info(f"Model Parameters: {sum(p.numel() for p in model.parameters()):,}")
+    print(f"Model Parameters: {sum(p.numel() for p in model.parameters()):,}")
     opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0)
 
     # Freeze vae and text_encoder
@@ -162,6 +169,11 @@ def main(args):
 
     # Setup data:
     dataset = get_dataset(args)
+    logger.info(f"Dataset {dataset}")
+    if args.load_latent:
+        logger.info(f"Loading latent from {args.latent_path}")
+    else:
+        logger.info(f"Loading video from {args.data_path}")
 
     sampler = DistributedSampler(
         dataset,
@@ -180,6 +192,7 @@ def main(args):
         drop_last=True
     )
     logger.info(f"Dataset contains {len(dataset):,} videos ({args.data_path})")
+    logger.info(f"Batch size per GPU: {args.local_batch_size}, global batch size: {args.local_batch_size * dist.get_world_size()}")
 
     # Scheduler
     lr_scheduler = get_scheduler(

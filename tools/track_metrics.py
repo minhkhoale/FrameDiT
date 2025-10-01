@@ -101,6 +101,13 @@ def run_sampling(
 ):
     sampler = SAMPLE_DIFFERENCE_ENTRY if args.is_difference else SAMPLE_ENTRY
 
+    # check if output dir already exists, and num_fvd_samples videos are present, then skip
+    existing_videos = list(save_video_path.glob("*.mp4"))
+    if len(existing_videos) >= args.num_fvd_samples:
+        with log_file.open("a") as lf:
+            lf.write(f"[info] Output already exists, skipping: {save_video_path} with {len(existing_videos)} videos\n")
+        return 0
+
     cmd = [
         "torchrun",
         "--nnodes=1",
@@ -146,6 +153,12 @@ def run_metrics(
         "--resolution", str(resolution),
         "--result_file", result_file,
     ]
+    # check if result_file exists, return immediately if so
+    if result_file.exists():
+        with log_file.open("a") as lf:
+            lf.write(f"[info] Metrics already exist, skipping: {result_file}\n")
+        return 0
+
     rc = run_cmd(metrics_cmd, log_file, env=env.as_environ())
     if rc != 0:
         with log_file.open("a") as lf:
@@ -171,10 +184,11 @@ def write_metrics_to_wandb(metrics_file: Path, step: int) -> None:
         k = k.replace('final/VideoMetricType.', '').replace('VBENCH/VBenchDimensionType.', 'VBENCH_')
         final_metrics[f'metrics/{k}'] = v
 
+    print('final_metrics', final_metrics)
     # define metrics if not already defined, with custom step since default steps must be monotonically increasing, and I want to log to a existing run
     for k, v in final_metrics.items():
-        wandb.define_metric(k, step_metric="step")
-        wandb.log({k: v, "step": step})
+        wandb.define_metric(k, step_metric="n_step")
+        wandb.log({k: v, "n_step": step})
 
     print(f"[wandb] Logged metrics for step {step} from {metrics_file}")
 
@@ -226,21 +240,23 @@ def process_checkpoint(
         return
     
     # write to wandb
-    write_metrics_to_wandb(metrics_file, step)
-
+    # write_metrics_to_wandb(metrics_file, step)
 
     mark_processed(ckpt_path, state_file=paths.state_file)
     with log_file.open("a") as lf:
         lf.write(f"[ok] Completed end-to-end for {ckpt_path.name}\n")
 
 
-def initial_scan(env: RunEnv, paths: Paths, real_data_path: Path, sampler_args: SamplerArgs) -> None:
+def initial_scan(env: RunEnv, paths: Paths, real_data_path: Path, sampler_args: SamplerArgs, reverse=False) -> None:
     if not paths.ckpt_dir.exists():
         print(f"[warn] Checkpoints dir does not exist: {paths.ckpt_dir}")
         return
 
-    for f in sorted(paths.ckpt_dir.glob("*.pt")):
+    ckpts = sorted(paths.ckpt_dir.glob("*.pt"), reverse=reverse)
+    print('[info] Found checkpoints:', [f.name for f in ckpts])
+    for f in ckpts:
         if not already_processed(f, paths.state_file):
+            print(f"[info] Processing existing checkpoint: {f.name}")
             process_checkpoint(env, paths, f, real_data_path, sampler_args)
 
 
@@ -311,6 +327,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--fps', type=int, help='Frames per second for video', default=8)
     parser.add_argument('--video-quality', type=int, help='Quality for video encoding (1-10)', default=9)
     parser.add_argument('--wandb-run-id', type=str, help='W&B run ID for logging', default='')
+    parser.add_argument('--reverse', action='store_true', help='Process existing checkpoints in reverse order')
     args = parser.parse_args()
     return args
 
@@ -368,7 +385,7 @@ def main():
         sys.exit(0)
 
     # Initial pass over existing files
-    initial_scan(env, paths, real_data_path, sampler_args)
+    initial_scan(env, paths, real_data_path, sampler_args, reverse=args.reverse)
 
     # Watch for new checkpoints
     watch_checkpoints(env, paths, real_data_path, sampler_args)

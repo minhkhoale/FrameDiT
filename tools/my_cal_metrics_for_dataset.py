@@ -103,11 +103,13 @@ def cal_metrics(
         dataset=real_dataset,
         sampler=random.sample(range(len(real_dataset)), num_items),
         batch_size=NUM_FRAMES_IN_BATCH[resolution],
+        num_workers=4
     )
     fake_loader = torch.utils.data.DataLoader(
         dataset=fake_dataset,
         sampler=random.sample(range(len(fake_dataset)), num_items),
         batch_size=NUM_FRAMES_IN_BATCH[resolution],
+        num_workers=4
     )
 
     for real_batch, fake_batch in tqdm(zip(real_loader, fake_loader)):
