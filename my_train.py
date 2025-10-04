@@ -84,12 +84,18 @@ def main(args):
 
         gaussian_name = args.diffusion_name if 'diffusion_name' in args else None
         experiment_name = f"{experiment_index:03d}-{model_string_name}-{num_frame_string}-{args.dataset}{args.image_size}"
+        if args.num_frames != 16:
+            experiment_name += f"-{args.num_frames}f"
+
         if not args.load_latent:
             experiment_name += "-novae"
         if gaussian_name is not None:
             experiment_name += f"-{gaussian_name}"
 
-        experiment_dir = f"{args.results_dir}/{args.dataset}{args.image_size}/{experiment_name}"  # Create an experiment folder
+        if args.num_frames == 16:
+            experiment_dir = f"{args.results_dir}/{args.dataset}{args.image_size}/{experiment_name}"  # Create an experiment folder
+        else:
+            experiment_dir = f"{args.results_dir}/{args.dataset}{args.image_size}-{args.num_frames}/{experiment_name}"  # Create an experiment folder
         experiment_dir = get_experiment_dir(experiment_dir, args)
 
         checkpoint_dir = f"{experiment_dir}/checkpoints"  # Stores saved model checkpoints
@@ -192,6 +198,7 @@ def main(args):
         drop_last=True
     )
     logger.info(f"Dataset contains {len(dataset):,} videos ({args.data_path})")
+    logger.info(f"Num frames per video: {args.num_frames}, frame interval: {args.frame_interval}")
     logger.info(f"Batch size per GPU: {args.local_batch_size}, global batch size: {args.local_batch_size * dist.get_world_size()}")
 
     # Scheduler

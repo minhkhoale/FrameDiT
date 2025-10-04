@@ -7,12 +7,15 @@ from .latte_img import LatteIMG_models
 # from .latte_t2v import LatteT2V
 from .mat_latte import MatLatte_models
 from .mat_lattev2 import MatLatteV2_models
+from .mat_latte_img import MatLatteIMG_models
 from .dit3d import DiT3D_models
 from .diff_latte import DiffLatte_models
 from .diff_lattev2 import DiffLatteV2_models
 from .latte_v2 import LatteV2_models
 from .spatial_diff_lattev2 import SpatialDiffLatteV2_models
 from .temporal_diff_lattev2 import TemporalDiffLatteV2_models
+from .fused_mat_latte import FusedMatLatte_models
+from .fused_mat_latte_unsqueeze import UnsqueezedFusedMatLatte_models
 
 from torch.optim.lr_scheduler import LambdaLR
 
@@ -48,6 +51,9 @@ def get_models(args):
         'TemporalDiffLatteV2': TemporalDiffLatteV2_models,
         'MatLatte': MatLatte_models,
         'MatLatteV2': MatLatteV2_models,
+        'FusedMatLatte': FusedMatLatte_models,
+        'MatLatteIMG': MatLatteIMG_models,
+        'UnsqueezedFusedMatLatte': UnsqueezedFusedMatLatte_models,
     }[args.model.split('-')[0]]
     return model_class[args.model](
         input_size=args.latent_size,
