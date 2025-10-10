@@ -148,13 +148,16 @@ class FaceForensics(torch.utils.data.Dataset):
         total_frames = len(vframes)
         
         # Sampling video frames
-        start_frame_ind, end_frame_ind = self.temporal_sample(total_frames)
-        assert end_frame_ind - start_frame_ind >= self.target_video_len
-        frame_indice = np.linspace(start_frame_ind, end_frame_ind-1, self.target_video_len, dtype=int)
+        if self.temporal_sample is not None:
+            start_frame_ind, end_frame_ind = self.temporal_sample(total_frames)
+            assert end_frame_ind - start_frame_ind >= self.target_video_len
+            frame_indice = np.linspace(start_frame_ind, end_frame_ind-1, self.target_video_len, dtype=int)
+        else:
+            frame_indice = np.linspace(0, total_frames-1, total_frames, dtype=int)
         video = vframes[frame_indice]
         # videotransformer data proprecess
         video = self.transform(video) # T C H W
-        return {'video': video, 'video_name': 1}
+        return {'video': video, 'video_name': 1, 'video_path': path}
 
     def __len__(self):
         return len(self.video_lists)

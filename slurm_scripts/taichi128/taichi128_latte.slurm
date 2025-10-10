@@ -1,10 +1,10 @@
 #!/bin/bash
 #SBATCH --qos=batch-short
-#SBATCH --job-name=VAEsample-Latte-taichi128
+#SBATCH --job-name=Latte-taichi128
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=2
 #SBATCH --gpus=2
-#SBATCH --constraint=gpu-l40s
+#SBATCH --constraint=gpu-a100
 #SBATCH --mem=64GB
 #SBATCH --cpus-per-task=6
 #SBATCH --time=60:00:00

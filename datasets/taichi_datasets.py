@@ -29,16 +29,20 @@ class Taichi(data.Dataset):
     def __getitem__(self, index):
         video_path, total_frames = self.data_all[index]
         # Sampling video frames
-        start_frame_ind, end_frame_ind = self.temporal_sample(total_frames)
-        assert end_frame_ind - start_frame_ind >= self.target_video_len
-        frame_indice = np.linspace(start_frame_ind, end_frame_ind-1, self.target_video_len, dtype=int).tolist()
+        if self.temporal_sample is not None:
+            start_frame_ind, end_frame_ind = self.temporal_sample(total_frames)
+            assert end_frame_ind - start_frame_ind >= self.target_video_len
+            frame_indice = np.linspace(start_frame_ind, end_frame_ind-1, self.target_video_len, dtype=int).tolist()
+        # Load whole video frames
+        else:
+            frame_indice = np.linspace(0, total_frames-1, total_frames, dtype=int).tolist()
 
         vr = VideoReader(video_path, ctx=cpu(0))
         frames = vr.get_batch(frame_indice).asnumpy()
         video_clip = torch.from_numpy(frames).permute(0, 3, 1, 2)
         
         video_clip = self.transform(video_clip)
-        return {'video': video_clip, 'video_name': 1}
+        return {'video': video_clip, 'video_name': 1, 'video_path': video_path}
 
     def __len__(self):
         return self.video_num

@@ -792,6 +792,9 @@ def MatLatte_XL_256_512_2(**kwargs):
 def MatLatte_M_1_256_2(**kwargs):
     return MatLatte_M_2(qk_col_dim=1, v_col_dim=256, num_col_heads=1, **kwargs)
 
+def MatLatte_M_2_256_2(**kwargs):
+    return MatLatte_M_2(qk_col_dim=2, v_col_dim=256, num_col_heads=2, **kwargs)
+
 def MatLatte_M_4_256_2(**kwargs):
     return MatLatte_M_2(qk_col_dim=4, v_col_dim=256, num_col_heads=4, **kwargs)
 
@@ -858,6 +861,7 @@ def MatLatte_B_16_16_2(**kwargs):
 MatLatte_models = {
     'MatLatte-B/16-16/2': MatLatte_B_16_16_2,
     'MatLatte-M/1-256/2': MatLatte_M_1_256_2,
+    'MatLatte-M/2-256/2': MatLatte_M_2_256_2,
     'MatLatte-M/4-256/2': MatLatte_M_4_256_2, 'MatLatte-M/4-512/2': MatLatte_M_4_512_2, 
     'MatLatte-M/8-256/2': MatLatte_M_8_256_2, 
     'MatLatte-M/16-64/2': MatLatte_M_16_64_2, 'MatLatte-M/16-256/2': MatLatte_M_16_256_2, 'MatLatte-M/16-512/2': MatLatte_M_16_512_2,

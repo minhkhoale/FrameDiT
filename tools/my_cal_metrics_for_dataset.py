@@ -99,6 +99,7 @@ def cal_metrics(
     # item_subset = random.sample(range(data_length), num_items) # added by xin, randomly selected 2048 videos
 
     print('num_items:', num_items)
+    print('len(real_dataset):', len(real_dataset))
     real_loader = torch.utils.data.DataLoader(
         dataset=real_dataset,
         sampler=random.sample(range(len(real_dataset)), num_items),
@@ -134,6 +135,20 @@ def cal_metrics(
             json.dump(finals, f, indent=4)
         print(f'Saved results to {result_file}')
 
+
+def get_num_frames(video_dir: str) -> int:
+    # get abitrary video file in the folder
+    import os
+    video_files = [f for f in os.listdir(video_dir) if f.endswith(('.mp4', '.avi', '.mov', '.mkv'))]
+    if len(video_files) == 0:
+        raise ValueError(f'No video files found in {video_dir}')
+    video_path = os.path.join(video_dir, video_files[0])
+    import cv2
+    cap = cv2.VideoCapture(video_path)
+    num_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    cap.release()
+    return num_frames
+
 if __name__ == "__main__":
     import argparse
 
@@ -142,12 +157,26 @@ if __name__ == "__main__":
     parser.add_argument('--fake_data_path', type=str, required=True, help='Path to the fake videos')
     parser.add_argument('--mirror', action='store_true', help='Whether to apply x-flip augmentation')
     parser.add_argument('--resolution', type=int, default=256, help='Resolution of the videos')
+    parser.add_argument('--real-sample-factor', type=int, default=6, help='Subsample factor for real videos')
     parser.add_argument('--verbose', action='store_true', help='Whether to print out more information')
     parser.add_argument('--result_file', type=str, help='Path to save the results')
     args = parser.parse_args()
 
+    num_frames = get_num_frames(args.fake_data_path)
+    print(f'Number of frames in the videos: {num_frames}')
+
     metrics = ['vbench', 'fvd', 'is', 'fid', 'lpips', 'mse', 'ssim', 'psnr']
-    cal_metrics(metrics=metrics, real_data_path=args.real_data_path, fake_data_path=args.fake_data_path, mirror=args.mirror, resolution=args.resolution, verbose=args.verbose, result_file=args.result_file)
+    cal_metrics(
+        metrics=metrics, 
+        num_frames=num_frames,
+        real_data_path=args.real_data_path, 
+        fake_data_path=args.fake_data_path, 
+        mirror=args.mirror, 
+        resolution=args.resolution, 
+        verbose=args.verbose, 
+        result_file=args.result_file,
+        realdata_subsample_factor=args.real_sample_factor,
+    )
 
 
        

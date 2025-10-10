@@ -84,7 +84,10 @@ def main(args):
         logger.info(f"Experiment directory created at {experiment_dir}")
 
         project = "debug" if args.debug and args.project is not None else args.project
-        wandb.init(project=project, name=experiment_name, tags=['video_generation', model_string_name, f"{args.dataset}{args.image_size}", "training"]) if args.project else None
+        if hasattr(args, "run_id") and args.run_id is not None:
+            wandb.init(project=project, id=args.run_id, resume="must") if args.project else None
+        else:
+            wandb.init(project=project, name=experiment_name, tags=['video_generation', model_string_name, f"{args.dataset}{args.image_size}", "training"]) if args.project else None
     else:
         logger = create_logger(None)
 

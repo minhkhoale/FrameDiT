@@ -25,13 +25,18 @@ class Sky(data.Dataset):
 
     def __getitem__(self, index):
 
-        vframes = self.data_all[index]
+        data = self.data_all[index]
+        vframes = data['frames']
+        path = data['path']
         total_frames = len(vframes)
 
         # Sampling video frames
-        start_frame_ind, end_frame_ind = self.temporal_sample(total_frames)
-        assert end_frame_ind - start_frame_ind >= self.target_video_len
-        frame_indice = np.linspace(start_frame_ind, end_frame_ind-1, num=self.target_video_len, dtype=int) # start, stop, num=50
+        if self.temporal_sample is not None:
+            start_frame_ind, end_frame_ind = self.temporal_sample(total_frames)
+            assert end_frame_ind - start_frame_ind >= self.target_video_len
+            frame_indice = np.linspace(start_frame_ind, end_frame_ind-1, num=self.target_video_len, dtype=int) # start, stop, num=50
+        else:
+            frame_indice = np.linspace(0, total_frames-1, total_frames, dtype=int)
 
         select_video_frames = vframes[frame_indice[0]: frame_indice[-1]+1: self.frame_interval] 
 
@@ -42,7 +47,7 @@ class Sky(data.Dataset):
         video_clip = torch.cat(video_frames, dim=0).permute(0, 3, 1, 2)
         video_clip = self.transform(video_clip)
 
-        return {'video': video_clip, 'video_name': 1}
+        return {'video': video_clip, 'video_name': 1, 'video_path': path}
 
     def __len__(self):
         return self.video_num
@@ -60,7 +65,7 @@ class Sky(data.Dataset):
             frames = [os.path.join(root, item) for item in frames if is_image_file(item)]
             if len(frames) > max(0, self.target_video_len * self.frame_interval): # need all > (16 * frame-interval) videos
             # if len(frames) >= max(0, self.target_video_len): # need all > 16 frames videos
-                data_all.append(frames)
+                data_all.append({'frames': frames, 'path': root})
         self.video_num = len(data_all)
         return data_all
     

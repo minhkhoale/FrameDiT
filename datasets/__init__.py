@@ -27,6 +27,13 @@ def get_dataset(args):
                 transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
             ])
         return FaceForensics(args, transform=transform_ffs, temporal_sample=temporal_sample)
+    elif args.dataset == 'ffs_whole':
+        transform = transforms.Compose([
+            video_transforms.ToTensorVideo(), # TCHW
+            video_transforms.CenterCropResizeVideo(args.image_size),
+            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
+        ])
+        return FaceForensics(args, transform=transform)
     elif args.dataset == 'ffs_img':
         transform_ffs = transforms.Compose([
             video_transforms.ToTensorVideo(), # TCHW
@@ -73,6 +80,13 @@ def get_dataset(args):
                     transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
                 ])
             return Taichi(args, transform=transform_taichi, temporal_sample=temporal_sample)
+    elif args.dataset == 'taichi_whole':
+        transform_taichi = transforms.Compose([
+            video_transforms.ToTensorVideo(), # TCHW
+            video_transforms.CenterCropResizeVideo(args.image_size),
+            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
+        ])
+        return Taichi(args, transform=transform_taichi)
     elif args.dataset == 'taichi_img':
         if args.load_latent:
             transform_taichi = transforms.Compose([])
@@ -95,6 +109,13 @@ def get_dataset(args):
                     transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
             ])
         return Sky(args, transform=transform_sky, temporal_sample=temporal_sample)
+    elif args.dataset == 'sky_whole':
+        transform_sky = transforms.Compose([
+                video_transforms.ToTensorVideo(),
+                video_transforms.CenterCropResizeVideo(args.image_size),
+                transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
+        ])
+        return Sky(args, transform=transform_sky)
     elif args.dataset == 'sky_img':  
         transform_sky = transforms.Compose([
                     video_transforms.ToTensorVideo(),

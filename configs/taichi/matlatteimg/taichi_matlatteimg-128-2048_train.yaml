@@ -1,15 +1,15 @@
 # dataset
 dataset: "taichi_img"
 
-data_path: null
-latent_path: "/scratch/s224075134/temporal_diffusion/datasets/video/taichi_latent_32_kl_f8_autoencoder/train"
-load_latent: True
+data_path: "/scratch/s224075134/temporal_diffusion/datasets/video/taichi-hd/taichi-256/frames/train"
+latent_path: 
+load_latent: False
 
 vae: "./configs/vae/autoencoder_kl.yaml"
 
 # save and load
 results_dir: "./results_img"
-pretrained:
+pretrained: /scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/results_img/taichi_img256/006-MatLatteIMG-XL-128-1024-2-F16S3-taichi_img256/checkpoints/0240000.pt
 
 # model config: 
 model: MatLatteIMG-XL/128-1024/2
@@ -47,3 +47,4 @@ enable_xformers_memory_efficient_attention: False
 gradient_checkpointing: False
 
 project: vdm
+run_id: 4xikrhjb

@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --qos=batch-short
 #SBATCH --partition=gpu-large
-#SBATCH --job-name=MatLatte-taichi
+#SBATCH --job-name=taichi_matlatte-128-512_train
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=2
 #SBATCH --gpus=2
@@ -9,8 +9,8 @@
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=6
 #SBATCH --time=60:00:00
-#SBATCH --output=slurm_log/%j.out 
-#SBATCH --error=slurm_log/%j.err
+#SBATCH --output=slurm_log/taichi_matlatte-128-512_train-%j.out 
+#SBATCH --error=slurm_log/taichi_matlatte-128-512_train-%j.err
 
 source ~/.bashrc
 

@@ -78,6 +78,17 @@ def get_real_data_path(dataset_name: str) -> str:
             return '/scratch/s224075134/temporal_diffusion/datasets/video/taichi-hd/taichi-256/frames/train'
         case _:
             raise ValueError(f"Unknown dataset name: {dataset_name}")
+
+def get_real_data_sample_factor(dataset_name: str, num_frames: int) -> int:
+    match dataset_name:
+        case 'taichi128':
+            if num_frames == 16:
+                return 6
+            elif num_frames == 32:
+                return 5
+            raise ValueError(f"Unsupported num_frames {num_frames} for dataset {dataset_name}")
+        case _:
+            raise ValueError(f"Unknown dataset name: {dataset_name}")
         
 
 def get_available_gpus():

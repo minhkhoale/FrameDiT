@@ -19,7 +19,8 @@ from .tracking_utils import (
     mark_processed,
     extract_step_from_ckpt,
     get_real_data_path,
-    get_available_gpus
+    get_available_gpus,
+    get_real_data_sample_factor
 )
 import wandb
 # ==============================
@@ -68,6 +69,10 @@ class Paths:
         metrics_dir = generation_dir / "metrics"
         state_file = generation_dir / STATE_FILE
         return Paths(experiment_dir, generation_dir, config_path, ckpt_dir, logs_dir, metrics_dir, state_file, dataset_name)
+    
+    def args(self) -> list[str]:
+        cfg = OmegaConf.load(self.config_path)
+        return cfg
 
     def ensure_dirs(self) -> None:
         self.generation_dir.mkdir(parents=True, exist_ok=True)
@@ -90,6 +95,7 @@ class SamplerArgs:
     num_fvd_samples: int
     fps: int
     video_quality: int
+    real_sample_factor: int
 
 
 def run_sampling(
@@ -145,6 +151,7 @@ def run_metrics(
     fake_data_path: Path,
     result_file: Path,
     resolution: int = 128,
+    real_sample_factor: int = 1,
 ):
     metrics_cmd = [
         sys.executable, METRICS_SCRIPT,
@@ -152,6 +159,8 @@ def run_metrics(
         "--fake_data_path", fake_data_path,
         "--resolution", str(resolution),
         "--result_file", result_file,
+        '--verbose',
+        '--real-sample-factor', str(real_sample_factor)
     ]
     # check if result_file exists, return immediately if so
     if result_file.exists():
@@ -235,6 +244,7 @@ def process_checkpoint(
         fake_data_path=out_dir,
         resolution=metrics_resolution,
         result_file=metrics_file,
+        real_sample_factor=sampler_args.real_sample_factor,
     )
     if rc != 0:
         return
@@ -342,6 +352,8 @@ def main():
         num_sampling_steps=args.num_sampling_steps,
     )
     paths.ensure_dirs()
+    
+    cfg = paths.args()
 
     # Print W&B attach info
     run_id = args.wandb_run_id or os.getenv("WANDB_RUN_ID", "")
@@ -353,6 +365,7 @@ def main():
         print("[warn] [wandb] run_id is not set. Your sampler/metrics scripts must handle W&B init on their own.")
 
     real_data_path = Path(get_real_data_path(dataset_name=paths.dataset_name))
+    real_sample_factor = get_real_data_sample_factor(paths.dataset_name, cfg.num_frames)
 
     devices = get_available_gpus()
     cuda_available_devices = ",".join(str(d) for d in devices)
@@ -372,7 +385,9 @@ def main():
         num_fvd_samples=args.num_fvd_samples,
         fps=args.fps,
         video_quality=args.video_quality,
+        real_sample_factor=real_sample_factor
     )
+    print("sampler_args", sampler_args)
 
     if args.ckpt:
         if not args.ckpt.exists():

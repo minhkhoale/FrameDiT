@@ -88,7 +88,7 @@ def main(args):
             experiment_name += f"-{args.num_frames}f"
 
         if not args.load_latent:
-            experiment_name += "-novae"
+            experiment_name += "-no_load_latent"
         if gaussian_name is not None:
             experiment_name += f"-{gaussian_name}"
 
