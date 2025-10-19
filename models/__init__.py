@@ -16,6 +16,7 @@ from .spatial_diff_lattev2 import SpatialDiffLatteV2_models
 from .temporal_diff_lattev2 import TemporalDiffLatteV2_models
 from .fused_mat_latte import FusedMatLatte_models
 from .fused_mat_latte_unsqueeze import UnsqueezedFusedMatLatte_models
+from .fused_mat_latte_img import FusedMatLatteIMG_models
 
 from torch.optim.lr_scheduler import LambdaLR
 
@@ -54,6 +55,7 @@ def get_models(args):
         'FusedMatLatte': FusedMatLatte_models,
         'MatLatteIMG': MatLatteIMG_models,
         'UnsqueezedFusedMatLatte': UnsqueezedFusedMatLatte_models,
+        'FusedMatLatteIMG': FusedMatLatteIMG_models,
     }[args.model.split('-')[0]]
     return model_class[args.model](
         input_size=args.latent_size,
@@ -61,5 +63,7 @@ def get_models(args):
         num_frames=args.num_frames,
         learn_sigma=args.learn_sigma,
         in_channels=args.in_channels,
-        extras=args.extras
+        extras=args.extras,
+        gradient_checkpointing=args.gradient_checkpointing,
+        attention_mode=args.get('attention_mode', 'math'),
     )

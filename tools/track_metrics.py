@@ -257,7 +257,7 @@ def process_checkpoint(
         lf.write(f"[ok] Completed end-to-end for {ckpt_path.name}\n")
 
 
-def initial_scan(env: RunEnv, paths: Paths, real_data_path: Path, sampler_args: SamplerArgs, reverse=False) -> None:
+def initial_scan(env: RunEnv, paths: Paths, real_data_path: Path, sampler_args: SamplerArgs, resolution: int, reverse=False, frequency=10000) -> None:
     if not paths.ckpt_dir.exists():
         print(f"[warn] Checkpoints dir does not exist: {paths.ckpt_dir}")
         return
@@ -265,9 +265,13 @@ def initial_scan(env: RunEnv, paths: Paths, real_data_path: Path, sampler_args: 
     ckpts = sorted(paths.ckpt_dir.glob("*.pt"), reverse=reverse)
     print('[info] Found checkpoints:', [f.name for f in ckpts])
     for f in ckpts:
+        ckpt_step = extract_step_from_ckpt(f)
+        if ckpt_step is None or ckpt_step % frequency != 0:
+            print(f"[info] Skipping checkpoint (invalid step or frequency): {f.name}")
+            continue
         if not already_processed(f, paths.state_file):
             print(f"[info] Processing existing checkpoint: {f.name}")
-            process_checkpoint(env, paths, f, real_data_path, sampler_args)
+            process_checkpoint(env, paths, f, real_data_path, sampler_args, metrics_resolution=resolution)
 
 
 def watch_checkpoints(env: RunEnv, paths: Paths, real_data_path: Path, sampler_args: SamplerArgs) -> None:
@@ -338,6 +342,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--video-quality', type=int, help='Quality for video encoding (1-10)', default=9)
     parser.add_argument('--wandb-run-id', type=str, help='W&B run ID for logging', default='')
     parser.add_argument('--reverse', action='store_true', help='Process existing checkpoints in reverse order')
+    parser.add_argument('--frequency', type=int, help='Checkpoint frequency (unused)', default=10000)
+    parser.add_argument('--resolution', type=int, help='Resolution for metrics computation', default=128)
     args = parser.parse_args()
     return args
 
@@ -400,7 +406,7 @@ def main():
         sys.exit(0)
 
     # Initial pass over existing files
-    initial_scan(env, paths, real_data_path, sampler_args, reverse=args.reverse)
+    initial_scan(env, paths, real_data_path, sampler_args, reverse=args.reverse, frequency=args.frequency, resolution=args.resolution)
 
     # Watch for new checkpoints
     watch_checkpoints(env, paths, real_data_path, sampler_args)

@@ -21,8 +21,15 @@ class FrechetVideoDistance(BaseFrechetDistance):
 
     @staticmethod
     def _check_input(fake: Tensor, real: Tensor, skip_message: str = "FVD") -> bool:
-        is_valid = fake.shape[1] >= 9 and real.shape[1] >= 9
+        is_valid = fake.shape[1] >= 9 and (real.shape[1] >= 9 if real is not None else True)
         if not is_valid:
             print(f"I3D requires at least 9 frames, skipping {skip_message}.")
 
         return is_valid
+
+    def update(self, fake: Tensor, real: Tensor) -> None:
+        if not self._check_input(fake, real):
+            return
+        self._update(fake, real=False)
+        if real is not None:
+            self._update(real, real=True)

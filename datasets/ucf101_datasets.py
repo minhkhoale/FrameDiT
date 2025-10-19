@@ -159,25 +159,30 @@ class UCF101(torch.utils.data.Dataset):
         vframes, aframes, info = torchvision.io.read_video(filename=path, pts_unit='sec', output_format='TCHW')
         total_frames = len(vframes)
         # Sampling video frames
-        start_frame_ind, end_frame_ind = self.temporal_sample(total_frames)
-        assert end_frame_ind - start_frame_ind >= self.target_video_len
-        frame_indice = np.linspace(start_frame_ind, end_frame_ind-1, self.target_video_len, dtype=int)
+        if self.temporal_sample is not None:
+            start_frame_ind, end_frame_ind = self.temporal_sample(total_frames)
+            assert end_frame_ind - start_frame_ind >= self.target_video_len
+            frame_indice = np.linspace(start_frame_ind, end_frame_ind-1, self.target_video_len, dtype=int)
+        else:
+            frame_indice = np.linspace(0, total_frames-1, total_frames, dtype=int).tolist()
         video = vframes[frame_indice] #
         video = self.transform(video) # T C H W
 
-        return {'video': video, 'video_name': class_index}
+        return {'video': video, 'video_name': class_index, 'video_path': path}
 
     def __len__(self):
         return len(self.video_lists)
 
     def load_video_frames(self, dataroot):
         data_all = []
+        all_filenames = []
         # Find all mp4 files in dataroot (recursively)
         video_files = []
         for root, _, files in os.walk(dataroot):
             for file in files:
                 if file.lower().endswith('.mp4'):
                     video_files.append(os.path.join(root, file))
+                    all_filenames.append(file)
 
         for video_path in video_files:
             vr = decord.VideoReader(video_path, ctx=decord.cpu(0))
@@ -185,6 +190,13 @@ class UCF101(torch.utils.data.Dataset):
             if n_frames > self.target_video_len:
                 data_all.append((video_path, n_frames))
             del vr
+        # check if there are duplicated video names
+        if len(all_filenames) != len(set(all_filenames)):
+            print("Warning: there are duplicated video names in the dataset!")
+            # print the duplicated video names
+            duplicated_names = set([name for name in all_filenames if all_filenames.count(name) > 1])
+            print("Duplicated video names: ", duplicated_names)
+        print('total {} videos have been loaded'.format(len(data_all)))
         return data_all
 
 

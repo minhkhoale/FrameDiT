@@ -24,12 +24,11 @@ class Sky(data.Dataset):
         self.data_all = self.load_video_frames(self.data_path)
 
     def __getitem__(self, index):
-
         data = self.data_all[index]
         vframes = data['frames']
-        path = data['path']
+        root_path = data['path']
         total_frames = len(vframes)
-
+        print(f'video {root_path} total frames: ', total_frames)
         # Sampling video frames
         if self.temporal_sample is not None:
             start_frame_ind, end_frame_ind = self.temporal_sample(total_frames)
@@ -38,7 +37,12 @@ class Sky(data.Dataset):
         else:
             frame_indice = np.linspace(0, total_frames-1, total_frames, dtype=int)
 
-        select_video_frames = vframes[frame_indice[0]: frame_indice[-1]+1: self.frame_interval] 
+        select_video_frames = []
+        for i in frame_indice:
+            select_video_frames.append(vframes[i])
+        # print('select_video_frames', select_video_frames[-2:])
+        # print('len(select_video_frames)', len(select_video_frames))
+        # exit(0)
 
         video_frames = []
         for path in select_video_frames:
@@ -47,7 +51,7 @@ class Sky(data.Dataset):
         video_clip = torch.cat(video_frames, dim=0).permute(0, 3, 1, 2)
         video_clip = self.transform(video_clip)
 
-        return {'video': video_clip, 'video_name': 1, 'video_path': path}
+        return {'video': video_clip, 'video_name': 1, 'video_path': root_path}
 
     def __len__(self):
         return self.video_num
@@ -62,10 +66,22 @@ class Sky(data.Dataset):
             except:
                 print(meta[0]) # root
                 print(meta[2]) # files
-            frames = [os.path.join(root, item) for item in frames if is_image_file(item)]
-            if len(frames) > max(0, self.target_video_len * self.frame_interval): # need all > (16 * frame-interval) videos
-            # if len(frames) >= max(0, self.target_video_len): # need all > 16 frames videos
-                data_all.append({'frames': frames, 'path': root})
+
+            # chunk video
+            if len(frames) >= 1000:
+                chunk_size = 1000
+                num_chunks = (len(frames) + chunk_size - 1) // chunk_size
+                for i in range(num_chunks):
+                    chunk_frames = frames[i*chunk_size:(i+1)*chunk_size]
+                    chunk_root = f'{root}_chunk_{i}'
+                    chunk_frames = [os.path.join(root, item) for item in chunk_frames if is_image_file(item)]
+                    if len(chunk_frames) > max(0, self.target_video_len * self.frame_interval):
+                        data_all.append({'frames': chunk_frames, 'path': chunk_root})
+            else:
+                frames = [os.path.join(root, item) for item in frames if is_image_file(item)]
+                if len(frames) > max(0, self.target_video_len * self.frame_interval):
+                    data_all.append({'frames': frames, 'path': root})
+
         self.video_num = len(data_all)
         return data_all
     

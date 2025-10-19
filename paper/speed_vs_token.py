@@ -98,7 +98,7 @@ def plot_combined_three(df: pd.DataFrame, save_path: Path):
     """
     set_pub_style()
     metrics = [
-        ("flops_GF", "MACs", "(a)"),
+        ("flops_GF", "FLOPs", "(a)"),
         ("latency_avg_ms", "Latency (ms)", "(b)"),
         ("peak_mem_MB", "Peak Memory (MB)", "(c)")
     ]

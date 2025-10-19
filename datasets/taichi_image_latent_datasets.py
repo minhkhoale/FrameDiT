@@ -33,7 +33,6 @@ class TaichiImagesLatent(data.Dataset):
         self.use_image_num = configs.use_image_num
 
     def __getitem__(self, index):
-
         video_index = index % self.video_num
         # vframes = self.data_all[video_index]
         video_path, total_frames = self.data_all[video_index]
@@ -73,25 +72,6 @@ class TaichiImagesLatent(data.Dataset):
 
     def __len__(self):
         return self.video_frame_num
-    
-    def load_video_frames(self, dataroot):
-        data_all = []
-        frames_all = []
-        frame_list = os.walk(dataroot)
-        for _, meta in enumerate(frame_list):
-            root = meta[0]
-            try:
-                frames = sorted(meta[2], key=lambda item: int(item.split('.')[0].split('_')[-1]))
-            except:
-                print(meta[0], meta[2])
-            frames = [os.path.join(root, item) for item in frames if is_image_file(item)]
-            # if len(frames) > max(0, self.sequence_length * self.sample_every_n_frames):
-            if len(frames) != 0:
-                data_all.append(frames)
-                for frame in frames:
-                    frames_all.append(frame)
-        # self.video_num = len(data_all)
-        return data_all, frames_all
     
     def load_video_frames_latent(self, dataroot):
         data_all = []

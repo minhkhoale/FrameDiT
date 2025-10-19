@@ -1,7 +1,7 @@
 # dataset
 dataset: "ucf101"
 
-data_path: "/scratch/s224075134/temporal_diffusion/datasets/video/ucf101/preprocessed_256_mp4"
+data_path: "/scratch/s224075134/temporal_diffusion/datasets/video/ucf101/video"
 latent_path:
 load_latent: False
 vae: "configs/vae/autoencoder_kl.yaml"

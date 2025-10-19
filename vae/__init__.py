@@ -20,7 +20,7 @@ def encode_video(model: torch.nn.Module, x: torch.Tensor):
     Input range: [-1,1]
     """
     B,F,C,H,W = x.shape
-    x = rearrange(x, 'b f c h w -> (b f) c h w')
+    x = rearrange(x, 'b f c h w -> (b f) c h w').contiguous()
     with torch.no_grad():
         match model:
             case AutoencoderKLWrapper():
@@ -29,7 +29,7 @@ def encode_video(model: torch.nn.Module, x: torch.Tensor):
                 latents = model.encode(x)
             case _:
                 raise NotImplementedError(f"VAE {type(model)} not implemented")
-        return rearrange(latents, '(b f) c h w -> b f c h w', b=B, f=F)
+        return rearrange(latents, '(b f) c h w -> b f c h w', b=B, f=F).contiguous()
     
 
 def decode_video(model: torch.nn.Module, latents: torch.Tensor):
@@ -37,7 +37,7 @@ def decode_video(model: torch.nn.Module, latents: torch.Tensor):
     x: (B,F,C,H,W).
     """
     B,F,C,H,W = latents.shape
-    latents = rearrange(latents, 'b f c h w -> (b f) c h w')
+    latents = rearrange(latents, 'b f c h w -> (b f) c h w').contiguous()
     with torch.no_grad():
         match model:
             case AutoencoderKLWrapper():

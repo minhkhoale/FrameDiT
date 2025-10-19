@@ -14,6 +14,8 @@ import numpy as np
 from typing import Tuple, Optional
 from einops import rearrange, repeat
 from timm.models.vision_transformer import Mlp, PatchEmbed
+from torch.utils.checkpoint import checkpoint
+from flash_attn import flash_attn_qkvpacked_func, flash_attn_func
 
 # the xformers lib allows less memory, faster training and inference
 try:
@@ -82,6 +84,8 @@ class Attention(nn.Module):
             attn = attn.softmax(dim=-1)
             attn = self.attn_drop(attn)
             x = (attn @ v).transpose(1, 2).reshape(B, N, C)
+        elif self.attention_mode == 'flash_v2':
+            x = flash_attn_func(q, k, v, dropout_p=0.0 if not self.training else self.attn_drop.p, causal=False).reshape(B, N, C)
         else:
             raise NotImplemented
 
@@ -242,6 +246,8 @@ class MatrixAttention(nn.Module):
             attn = self.attn_drop(attn)
             x = (attn @ v) # B, col_num_head * row_num_head, T, N*D
             x = rearrange(x, 'B (C R) T (N D) -> B T (C N) (R D)', C=self.num_col_heads, R=self.num_row_heads, N=self.v_head_col_dim, D=self.head_row_dim)
+        elif self.attention_mode == 'flash_v2':
+            x = flash_attn_func(q, k, v, dropout_p=0.0 if not self.training else self.attn_drop.p, causal=False).reshape(B, T, N*D)
         else:
             raise NotImplementedError(f"Unknown attention mode: {self.attention_mode}")
 
@@ -490,6 +496,7 @@ class MatLatte(nn.Module):
 
         self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
         self.initialize_weights()
+        self.gradient_checkpointing = kwargs.get('gradient_checkpointing', False)
 
     def initialize_weights(self):
         # Initialize transformer layers:
@@ -594,7 +601,11 @@ class MatLatte(nn.Module):
                 c = timestep_spatial + text_embedding_spatial
             else:
                 c = timestep_spatial
-            x  = spatial_block(x, c)
+
+            if self.gradient_checkpointing:
+                x = checkpoint(spatial_block, x, c)
+            else:
+                x = spatial_block(x, c)
 
             x = rearrange(x, '(b f) n d -> (b n) f d', b=batches)
             # Add Time Embedding
@@ -608,7 +619,11 @@ class MatLatte(nn.Module):
             else:
                 c = timestep_temp
 
+            # if self.gradient_checkpointing:
+            #     x = checkpoint(temp_block, x, c)
+            # else:
             x = temp_block(x, c)
+
             x = rearrange(x, '(b n) f d -> (b f) n d', b=batches)
 
         if self.extras == 2:
@@ -874,6 +889,7 @@ MatLatte_models = {
     'MatLatte-M/64-64/2-normalized-l1-u': MatLatte_M_64_64_2_normalized_l1_u, 'MatLatte-M/64-64/2-normalized-l2-u': MatLatte_M_64_64_2_normalized_l2_u,
     'MatLatte-M/64-256/2-normalized-l1-u': MatLatte_M_64_256_2_normalized_l1_u, 'MatLatte-M/64-256/2-normalized-l2-u': MatLatte_M_64_256_2_normalized_l2_u,
     'MatLatte-M/64-256/2-row-bias': MatLatte_M_64_256_2_row_bias,
+    
     'MatLatte-XL/64-512/2': MatLatte_XL_64_512_2, 'MatLatte-XL/128-512/2': MatLatte_XL_128_512_2, 'MatLatte-XL/256-256/2': MatLatte_XL_256_256_2,
     'MatLatte-XL/128-1024/2': MatLatte_XL_128_1024_2, 'MatLatte-XL/256-512/2': MatLatte_XL_256_512_2
 }

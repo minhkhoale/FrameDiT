@@ -78,14 +78,14 @@ def main(args):
     args.latent_size = latent_size
     model = get_models(args).to(device)
 
-    if args.use_compile:
-        model = torch.compile(model)
-
     # a pre-trained model or load a custom Latte checkpoint from train.py:
     ckpt_path = args.ckpt
     state_dict = find_model(ckpt_path)
     model.load_state_dict(state_dict)
+    if args.use_compile:
+        model = torch.compile(model)
     model.eval()  # important!
+    
     print('model', model)
     diffusion = create_diffusion(
         timestep_respacing=str(args.num_sampling_steps),

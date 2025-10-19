@@ -21,11 +21,16 @@ def convert_videos_to_frames(source_dir: os.PathLike, target_dir: os.PathLike, n
     os.makedirs(target_dir, exist_ok=True)
     os.makedirs(broken_clips_dir, exist_ok=True)
 
-    clips_paths = [cp for cp in listdir_full_paths(source_dir) if cp.endswith(video_ext)]
+    clips_paths = []
+    for root, dirs, files in os.walk(source_dir):
+        for file in files:
+            if file.endswith(f'.{video_ext}'):
+                clips_paths.append(os.path.join(root, file))
+
     clips_fps = []
     tasks_kwargs = [dict(
         clip_path=cp,
-        target_dir=target_dir,
+        target_dir=os.path.join(target_dir, cp.split('/')[-2]),
         broken_clips_dir=broken_clips_dir,
         **process_video_kwargs,
      ) for cp in clips_paths]
@@ -92,7 +97,7 @@ if __name__ == "__main__":
     parser.add_argument('-s', '--source_dir', type=str, help='Path to the source dataset')
     parser.add_argument('-t', '--target_dir', type=str, help='Where to save the new dataset')
     parser.add_argument('--video_ext', type=str, default='avi', help='Video extension')
-    parser.add_argument('--target_size', type=int, default=256, help='What size should we resize to?')
+    parser.add_argument('--target_size', type=int, help='What size should we resize to?')
     parser.add_argument('--force_fps', type=int, help='What fps should we run videos with?')
     parser.add_argument('--num_workers', type=int, default=8, help='Number of processes to launch')
     parser.add_argument('--compute_fps_only', action='store_true', help='Should we just compute fps?')

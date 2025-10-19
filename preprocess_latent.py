@@ -10,15 +10,15 @@ from omegaconf import OmegaConf
 
 def encode_video(vae, video, max_size=128):
     B = video.shape[0]
-    video = rearrange(video, 'b f c h w -> (b f) c h w')
+    video = rearrange(video, 'b f c h w -> (b f) c h w').contiguous()
     chunks = video.chunk((len(video) + max_size - 1) // max_size, dim=0)
     latents = []
     for chunk in chunks:
         with torch.no_grad():
-            latent = vae.encode(chunk).latent_dist.parameters
+            latent = vae.encode(chunk.contiguous()).latent_dist.parameters
             latents.append(latent)
     latents = torch.cat(latents, dim=0)
-    latents = rearrange(latents, '(b f) c h w -> b f c h w', b=B)
+    latents = rearrange(latents, '(b f) c h w -> b f c h w', b=B).contiguous()
     return latents
 
 def preprocess_latent(args):
@@ -32,6 +32,7 @@ def preprocess_latent(args):
     vae = get_vae(OmegaConf.load(args.vae))
     vae.eval()
     vae.to('cuda:0')
+    print("total number of videos: ", len(dataloader))
 
     for i, video_data in enumerate(tqdm(dataloader)):
         video = video_data['video'] # B T C H W
@@ -48,6 +49,7 @@ def preprocess_latent(args):
         for b in range(B):
             video_name = os.path.basename(video_path[b])
             video_name = video_name.replace('.mp4', '')
+            print(f'video {video_name} shape: {video[b].shape}, latent shape: {latents[b].shape}, flip latent shape: {flip_latents[b].shape}')
             save_file = os.path.join(args.save_path, f'{video_name}.pt')
             torch.save(latents[b].cpu(), save_file)
 

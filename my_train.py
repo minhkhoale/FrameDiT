@@ -68,7 +68,7 @@ def main(args):
     seed = args.global_seed + rank
     torch.manual_seed(seed)
     torch.cuda.set_device(device)
-    print(f"Starting rank={rank}, local rank={local_rank}, seed={seed}, world_size={dist.get_world_size()}.")    
+    print(f"Starting rank={rank}, local rank={local_rank}, seed={seed}, world_size={dist.get_world_size()}.")
     if args.debug:
         print("===============================\nRunning in debug mode.\n===============================")
 
@@ -84,11 +84,7 @@ def main(args):
 
         gaussian_name = args.diffusion_name if 'diffusion_name' in args else None
         experiment_name = f"{experiment_index:03d}-{model_string_name}-{num_frame_string}-{args.dataset}{args.image_size}"
-        if args.num_frames != 16:
-            experiment_name += f"-{args.num_frames}f"
 
-        if not args.load_latent:
-            experiment_name += "-no_load_latent"
         if gaussian_name is not None:
             experiment_name += f"-{gaussian_name}"
 
@@ -156,15 +152,14 @@ def main(args):
         model.load_state_dict(model_dict)
         logger.info('Successfully load model at {}!'.format(args.pretrained))
 
-    if args.use_compile:
-        model = torch.compile(model)
-
     # Note that parameter initialization is done within the Latte constructor
     ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
     requires_grad(ema, False)
   
     # set distributed training
     model = DDP(model.to(device), device_ids=[local_rank])
+    if args.use_compile:
+        model = torch.compile(model)
 
     logger.info(f"Model Parameters: {sum(p.numel() for p in model.parameters()):,}")
     print(f"Model Parameters: {sum(p.numel() for p in model.parameters()):,}")
@@ -213,6 +208,9 @@ def main(args):
     update_ema(ema, model.module, decay=0)  # Ensure EMA is initialized with synced weights
     model.train()  # important! This enables embedding dropout for classifier-free guidance
     ema.eval()  # EMA model should always be in eval mode
+
+    if args.mixed_precision_16bit:
+        scaler = torch.amp.GradScaler()
 
     # Variables for monitoring/logging purposes:
     train_steps = 0
@@ -274,21 +272,35 @@ def main(args):
                 model_kwargs = dict(y=None)
 
             t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
-            loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
-            loss = loss_dict["loss"].mean() / args.gradient_accumulation_steps
-            loss.backward()
+
+            if args.mixed_precision_16bit:
+                with torch.amp.autocast(dtype=torch.float16, device_type='cuda'):
+                    loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
+                    loss = loss_dict["loss"].mean() / args.gradient_accumulation_steps
+                scaler.scale(loss).backward()
+            else:
+                loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
+                loss = loss_dict["loss"].mean() / args.gradient_accumulation_steps
+                loss.backward()
+
             # for logging
             mse = loss_dict["mse"].mean().item() / args.gradient_accumulation_steps if "mse" in loss_dict else 0.0
             vb = loss_dict["vb"].mean().item() / args.gradient_accumulation_steps if "vb" in loss_dict else 0.0
-
-            if train_steps < args.start_clip_iter: # if train_steps >= start_clip_iter, will clip gradient
-                gradient_norm = clip_grad_norm_(model.module.parameters(), args.clip_max_norm, clip_grad=False)
-            else:
-                gradient_norm = clip_grad_norm_(model.module.parameters(), args.clip_max_norm, clip_grad=True)
-
             lr_scheduler.step()
+
             if train_steps % args.gradient_accumulation_steps == 0 and train_steps > 0:
-                opt.step()
+                scaler.unscale_(opt)
+                if train_steps < args.start_clip_iter: # if train_steps >= start_clip_iter, will clip gradient
+                    gradient_norm = clip_grad_norm_(model.module.parameters(), args.clip_max_norm, clip_grad=False)
+                else:
+                    gradient_norm = clip_grad_norm_(model.module.parameters(), args.clip_max_norm, clip_grad=True)
+            
+                if args.mixed_precision_16bit:
+                    scaler.step(opt)
+                    scaler.update()
+                else:
+                    opt.step()
+
                 opt.zero_grad()
                 update_ema(ema, model.module)
 

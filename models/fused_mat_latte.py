@@ -14,7 +14,7 @@ import numpy as np
 from typing import Tuple, Optional
 from einops import rearrange, repeat
 from timm.models.vision_transformer import Mlp, PatchEmbed
-
+from torch.utils.checkpoint import checkpoint
 # the xformers lib allows less memory, faster training and inference
 try:
     import xformers
@@ -103,6 +103,7 @@ class MatrixLinear(nn.Module):
         u_type='param',
         device=None,
         dtype=None,
+        **kwargs
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -118,6 +119,10 @@ class MatrixLinear(nn.Module):
                 assert in_features[0] == out_features[0], f"in_features[0] size {in_features[0]} must be equal to out_features[0] size {out_features[0]} for identity u"
                 u = torch.eye(in_features[0], **factory_kwargs)
                 self.register_buffer('u', u)
+            case 'sparse':
+                self.u = nn.Parameter(torch.empty((in_features[0], out_features[0]), **factory_kwargs))
+                # bandwidth = 
+
             case _:
                 raise NotImplementedError(f"Unknown u_type: {u_type}")
 
@@ -594,6 +599,8 @@ class FusedMatLatte(nn.Module):
         self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
         self.initialize_weights()
 
+        self.gradient_checkpointing = kwargs.get('gradient_checkpointing', False)
+
     def initialize_weights(self):
         # Initialize transformer layers:
         def _basic_init(module):
@@ -697,7 +704,11 @@ class FusedMatLatte(nn.Module):
                 c = timestep_spatial + text_embedding_spatial
             else:
                 c = timestep_spatial
-            x  = spatial_block(x, c)
+
+            if self.gradient_checkpointing:
+                x = checkpoint(spatial_block, x, c, use_reentrant=False)
+            else:
+                x = spatial_block(x, c)
 
             x = rearrange(x, '(b f) n d -> (b n) f d', b=batches)
             # Add Time Embedding
@@ -876,20 +887,17 @@ def FusedMatLatte_S_8(**kwargs):
     return FusedMatLatte(depth=12, hidden_size=384, patch_size=8, num_row_heads=6, **kwargs)
 
 # For image size 256
-def FusedMatLatte_XL_64_512_2(**kwargs):
-    return FusedMatLatte_XL_2(qk_col_dim=64, v_col_dim=512, num_col_heads=64, **kwargs)
+def FusedMatLatte_XL_256_512_2_concat(**kwargs):
+    return FusedMatLatte_XL_2(qk_col_dim=256, v_col_dim=512, num_col_heads=256, fuse_mode='concat', **kwargs)
 
-def FusedMatLatte_XL_128_512_2(**kwargs):
-    return FusedMatLatte_XL_2(qk_col_dim=128, v_col_dim=512, num_col_heads=128, **kwargs)
+def FusedMatLatte_XL_256_1024_2_concat(**kwargs):
+    return FusedMatLatte_XL_2(qk_col_dim=256, v_col_dim=1024, num_col_heads=256, fuse_mode='concat', **kwargs)
 
-def FusedMatLatte_XL_128_1024_2(**kwargs):
-    return FusedMatLatte_XL_2(qk_col_dim=128, v_col_dim=1024, num_col_heads=128, **kwargs)
+def FusedMatLatte_XL_128_512_2_concat(**kwargs):
+    return FusedMatLatte_XL_2(qk_col_dim=128, v_col_dim=512, num_col_heads=128, fuse_mode='concat', **kwargs)
 
-def FusedMatLatte_XL_256_256_2(**kwargs):
-    return FusedMatLatte_XL_2(qk_col_dim=256, v_col_dim=256, num_col_heads=256, **kwargs)
-
-def FusedMatLatte_XL_256_512_2(**kwargs):
-    return FusedMatLatte_XL_2(qk_col_dim=256, v_col_dim=512, num_col_heads=256, **kwargs)
+def FusedMatLatte_XL_128_1024_2_concat(**kwargs):
+    return FusedMatLatte_XL_2(qk_col_dim=128, v_col_dim=1024, num_col_heads=128, fuse_mode='concat', **kwargs)
 
 # For image size 128, 64 tokens per frame
 def FusedMatLatte_M_1_256_2(**kwargs):
@@ -917,6 +925,18 @@ def FusedMatLatte_M_16_256_2(**kwargs):
 # def FusedMatLatte_M_16_64_2(**kwargs):
 #     return FusedMatLatte_M_2(qk_col_dim=16, v_col_dim=64, num_col_heads=16, **kwargs)
 
+def FusedMatLatte_S_64_256_2_concat(**kwargs):
+    return FusedMatLatte_S_2(qk_col_dim=64, v_col_dim=256, num_col_heads=64, fuse_mode='concat', **kwargs)
+
+def FusedMatLatte_B_64_256_2_concat(**kwargs):
+    return FusedMatLatte_B_2(qk_col_dim=64, v_col_dim=256, num_col_heads=64, fuse_mode='concat', **kwargs)
+
+def FusedMatLatte_L_64_256_2_concat(**kwargs):
+    return FusedMatLatte_L_2(qk_col_dim=64, v_col_dim=256, num_col_heads=64, fuse_mode='concat', **kwargs)
+
+def FusedMatLatte_XL_64_256_2_concat(**kwargs):
+    return FusedMatLatte_XL_2(qk_col_dim=64, v_col_dim=256, num_col_heads=64, fuse_mode='concat', **kwargs)
+
 def FusedMatLatte_M_32_256_2(**kwargs):
     return FusedMatLatte_M_2(qk_col_dim=32, v_col_dim=256, num_col_heads=32, **kwargs)
 
@@ -925,6 +945,12 @@ def FusedMatLatte_M_64_64_2(**kwargs):
 
 def FusedMatLatte_M_64_256_2_gated(**kwargs):
     return FusedMatLatte_M_2(qk_col_dim=64, v_col_dim=256, num_col_heads=64, fuse_mode='gated', **kwargs)
+
+def FusedMatLatte_M_32_256_2_concat(**kwargs):
+    return FusedMatLatte_M_2(qk_col_dim=32, v_col_dim=256, num_col_heads=32, fuse_mode='concat', **kwargs)
+
+def FusedMatLatte_M_16_256_2_concat(**kwargs):
+    return FusedMatLatte_M_2(qk_col_dim=16, v_col_dim=256, num_col_heads=16, fuse_mode='concat', **kwargs)
 
 def FusedMatLatte_M_64_256_2_concat(**kwargs):
     return FusedMatLatte_M_2(qk_col_dim=64, v_col_dim=256, num_col_heads=64, fuse_mode='concat', **kwargs)
@@ -954,14 +980,33 @@ def FusedMatLatte_B_16_16_2(**kwargs):
 
 #============================================================================================
 FusedMatLatte_models = {
+    'FusedMatLatte-S/64-256/2-concat': FusedMatLatte_S_64_256_2_concat,
+
+    'FusedMatLatte-B/64-256/2-concat': FusedMatLatte_B_64_256_2_concat,
+
+    'FusedMatLatte-L/64-256/2-concat': FusedMatLatte_L_64_256_2_concat,
+
+    'FusedMatLatte-XL/64-256/2-concat': FusedMatLatte_XL_64_256_2_concat,
+
     'FusedMatLatte-M/4-64/2-concat': FusedMatLatte_M_4_64_2_concat,
     'FusedMatLatte-M/16-64/2-gated': FusedMatLatte_M_16_64_2_gated,
     'FusedMatLatte-M/16-64/2-concat': FusedMatLatte_M_16_64_2_concat,
     'FusedMatLatte-M/16-64/2-sum': FusedMatLatte_M_16_64_2_sum,
+
+    'FusedMatLatte-M/32-256/2-concat': FusedMatLatte_M_32_256_2_concat,
+    'FusedMatLatte-M/16-256/2-concat': FusedMatLatte_M_16_256_2_concat,
+
+
     'FusedMatLatte-M/64-256/2-gated': FusedMatLatte_M_64_256_2_gated,
     'FusedMatLatte-M/64-256/2-concat': FusedMatLatte_M_64_256_2_concat,
     'FusedMatLatte-M/64-256/2-sum': FusedMatLatte_M_64_256_2_sum,
     'FusedMatLatte-M/2-onlylocal': FusedMatLatte_M_2_onlylocal,
+
+    'FusedMatLatte-XL/128-512/2-concat': FusedMatLatte_XL_128_512_2_concat,
+    'FusedMatLatte-XL/128-1024/2-concat': FusedMatLatte_XL_128_1024_2_concat,
+
+    'FusedMatLatte-XL/256-512/2-concat': FusedMatLatte_XL_256_512_2_concat,
+    'FusedMatLatte-XL/256-1024/2-concat': FusedMatLatte_XL_256_1024_2_concat,
 }
 
     # 'FusedMatLatte-B/16-16/2': FusedMatLatte_B_16_16_2,

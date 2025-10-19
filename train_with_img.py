@@ -72,7 +72,10 @@ def main(args):
         model_string_name = args.model.replace("/", "-")  # e.g., Latte-XL/2 --> Latte-XL-2 (for naming folders)
         num_frame_string = 'F' + str(args.num_frames) + 'S' + str(args.frame_interval)
 
+        gaussian_name = args.diffusion_name if 'diffusion_name' in args else None
         experiment_name = f"{experiment_index:03d}-{model_string_name}-{num_frame_string}-{args.dataset}{args.image_size}"
+        if gaussian_name is not None:
+            experiment_name += f"-{gaussian_name}"
         experiment_dir = f"{args.results_dir}/{args.dataset}{args.image_size}/{experiment_name}"  # Create an experiment folder
         experiment_dir = get_experiment_dir(experiment_dir, args)
 
@@ -97,11 +100,18 @@ def main(args):
     args.latent_size = sample_size
     model = get_models(args)
     print('Model', model)
-
     
-    diffusion = create_diffusion(timestep_respacing="")  # default: 1000 steps, linear noise schedule
-    # vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-ema").to(device)
-    # vae = AutoencoderKL.from_pretrained(args.pretrained_model_path, subfolder="sd-vae-ft-mse").to(device)
+    diffusion = create_diffusion(
+        name=args.diffusion_name if 'diffusion_name' in args else 'gaussian_diffusion',
+        timestep_respacing=None,
+        noise_schedule="linear",
+        use_kl=False,
+        sigma_small=args.sigma_small if 'sigma_small' in args else False,
+        predict_xstart=args.predict_xstart if 'predict_xstart' in args else False,
+        learn_sigma=args.learn_sigma if 'learn_sigma' in args else True,
+    )  # default: 1000 steps, linear noise schedule
+    print('diffusion', diffusion)
+
     vae = get_vae(OmegaConf.load(args.vae)).to(device)
 
     # # use pretrained model?
@@ -125,20 +135,17 @@ def main(args):
         model.load_state_dict(model_dict)
         logger.info('Successfully load model at {}!'.format(args.pretrained))
 
-    if args.use_compile:
-        model = torch.compile(model)
-
     # Note that parameter initialization is done within the Latte constructor
     ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
     requires_grad(ema, False)
   
-    if args.enable_xformers_memory_efficient_attention:
-        logger.info("Using Xformers!")
-        model.enable_xformers_memory_efficient_attention()
+    # if args.enable_xformers_memory_efficient_attention:
+    #     logger.info("Using Xformers!")
+    #     model.enable_xformers_memory_efficient_attention()
 
-    if args.gradient_checkpointing:
-        logger.info("Using gradient checkpointing!")
-        model.enable_gradient_checkpointing()
+    # if args.gradient_checkpointing:
+    #     logger.info("Using gradient checkpointing!")
+    #     model.enable_gradient_checkpointing()
 
     if args.fixed_spatial:
         trainable_modules = (
@@ -154,6 +161,8 @@ def main(args):
 
     # set distributed training
     model = DDP(model.to(device), device_ids=[local_rank])
+    if args.use_compile:
+        model = torch.compile(model)
 
     logger.info(f"Model Parameters: {sum(p.numel() for p in model.parameters()):,}")
     opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0)
@@ -163,7 +172,11 @@ def main(args):
 
     # Setup data:
     dataset = get_dataset(args)
-
+    logger.info(f"Dataset {dataset}")
+    if args.load_latent:
+        logger.info(f"Loading latent from {args.latent_path}")
+    else:
+        logger.info(f"Loading video from {args.data_path}")
     sampler = DistributedSampler(
         dataset,
         num_replicas=dist.get_world_size(),
@@ -181,6 +194,8 @@ def main(args):
         drop_last=True
     )
     logger.info(f"Dataset contains {len(dataset):,} videos ({args.data_path})")
+    logger.info(f"Num frames per video: {args.num_frames}, frame interval: {args.frame_interval}")
+    logger.info(f"Batch size per GPU: {args.local_batch_size}, global batch size: {args.local_batch_size * dist.get_world_size()}")
 
     # Scheduler
     lr_scheduler = get_scheduler(
@@ -194,6 +209,9 @@ def main(args):
     update_ema(ema, model.module, decay=0)  # Ensure EMA is initialized with synced weights
     model.train()  # important! This enables embedding dropout for classifier-free guidance
     ema.eval()  # EMA model should always be in eval mode
+
+    if args.mixed_precision_16bit:
+        scaler = torch.amp.GradScaler()
 
     # Variables for monitoring/logging purposes:
     train_steps = 0
@@ -223,6 +241,9 @@ def main(args):
 
         first_epoch = train_steps // num_update_steps_per_epoch
         resume_step = train_steps % num_update_steps_per_epoch
+
+    if args.pretrained:
+        train_steps = int(args.pretrained.split("/")[-1].split('.')[0])
 
     total_start_time = time()
     for epoch in range(first_epoch, num_train_epochs):
@@ -258,21 +279,34 @@ def main(args):
                 model_kwargs = dict(y=None, use_image_num=args.use_image_num)
 
             t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
-            loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
-            loss = loss_dict["loss"].mean() / args.gradient_accumulation_steps
-            loss.backward()
+
+            if args.mixed_precision_16bit:
+                with torch.amp.autocast(dtype=torch.float16, device_type='cuda'):
+                    loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
+                    loss = loss_dict["loss"].mean() / args.gradient_accumulation_steps
+                scaler.scale(loss).backward()
+            else:
+                loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
+                loss = loss_dict["loss"].mean() / args.gradient_accumulation_steps
+                loss.backward()
             # for logging
             mse = loss_dict["mse"].mean().item() / args.gradient_accumulation_steps if "mse" in loss_dict else 0.0
             vb = loss_dict["vb"].mean().item() / args.gradient_accumulation_steps if "vb" in loss_dict else 0.0
-
-            if train_steps < args.start_clip_iter: # if train_steps >= start_clip_iter, will clip gradient
-                gradient_norm = clip_grad_norm_(model.module.parameters(), args.clip_max_norm, clip_grad=False)
-            else:
-                gradient_norm = clip_grad_norm_(model.module.parameters(), args.clip_max_norm, clip_grad=True)
-
             lr_scheduler.step()
+
             if train_steps % args.gradient_accumulation_steps == 0 and train_steps > 0:
-                opt.step()
+                scaler.unscale_(opt)
+                if train_steps < args.start_clip_iter: # if train_steps >= start_clip_iter, will clip gradient
+                    gradient_norm = clip_grad_norm_(model.module.parameters(), args.clip_max_norm, clip_grad=False)
+                else:
+                    gradient_norm = clip_grad_norm_(model.module.parameters(), args.clip_max_norm, clip_grad=True)
+            
+                if args.mixed_precision_16bit:
+                    scaler.step(opt)
+                    scaler.update()
+                else:
+                    opt.step()
+
                 opt.zero_grad()
                 update_ema(ema, model.module)
 
@@ -338,9 +372,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default="./configs/train.yaml")
     parser.add_argument("--debug", action='store_true', help="If true, run in debug mode.")
+    parser.add_argument("--num-workers", type=int, help="Number of dataloader workers.")
     args = parser.parse_args()
 
     configs = OmegaConf.load(args.config)
     configs.debug = args.debug
+    if args.num_workers is not None:
+        configs.num_workers = args.num_workers
 
     main(configs)

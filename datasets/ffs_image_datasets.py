@@ -12,188 +12,88 @@ from einops import rearrange
 from typing import Dict, List, Tuple
 from torchvision import transforms
 import traceback
+IMG_EXTENSIONS = ['.jpg', '.JPG', '.jpeg', '.JPEG', '.png', '.PNG']
 
-class_labels_map = None
-cls_sample_cnt = None
-
-def temporal_sampling(frames, start_idx, end_idx, num_samples):
-    """
-    Given the start and end frame index, sample num_samples frames between
-    the start and end with equal interval.
-    Args:
-        frames (tensor): a tensor of video frames, dimension is
-            `num video frames` x `channel` x `height` x `width`.
-        start_idx (int): the index of the start frame.
-        end_idx (int): the index of the end frame.
-        num_samples (int): number of frames to sample.
-    Returns:
-        frames (tersor): a tensor of temporal sampled video frames, dimension is
-            `num clip frames` x `channel` x `height` x `width`.
-    """
-    index = torch.linspace(start_idx, end_idx, num_samples)
-    index = torch.clamp(index, 0, frames.shape[0] - 1).long()
-    frames = torch.index_select(frames, 0, index)
-    return frames
-
-
-def numpy2tensor(x):
-    return torch.from_numpy(x)
-
-
-def get_filelist(file_path):
-    Filelist = []
-    for home, dirs, files in os.walk(file_path):
-        for filename in files:
-            # 文件名列表，包含完整路径
-            Filelist.append(os.path.join(home, filename))
-            # # 文件名列表，只包含文件名
-            # Filelist.append( filename)
-    return Filelist
-
-
-def load_annotation_data(data_file_path):
-    with open(data_file_path, 'r') as data_file:
-        return json.load(data_file)
-
-
-def get_class_labels(num_class, anno_pth='./k400_classmap.json'):
-    global class_labels_map, cls_sample_cnt
-    
-    if class_labels_map is not None:
-        return class_labels_map, cls_sample_cnt
-    else:
-        cls_sample_cnt = {}
-        class_labels_map = load_annotation_data(anno_pth)
-        for cls in class_labels_map:
-            cls_sample_cnt[cls] = 0
-        return class_labels_map, cls_sample_cnt
-
-
-def load_annotations(ann_file, num_class, num_samples_per_cls):
-    dataset = []
-    class_to_idx, cls_sample_cnt = get_class_labels(num_class)
-    with open(ann_file, 'r') as fin:
-        for line in fin:
-            line_split = line.strip().split('\t')
-            sample = {}
-            idx = 0
-            # idx for frame_dir
-            frame_dir = line_split[idx]
-            sample['video'] = frame_dir
-            idx += 1
-                                
-            # idx for label[s]
-            label = [x for x in line_split[idx:]]
-            assert label, f'missing label in line: {line}'
-            assert len(label) == 1
-            class_name = label[0]
-            class_index = int(class_to_idx[class_name])
-            
-            # choose a class subset of whole dataset
-            if class_index < num_class:
-                sample['label'] = class_index
-                if cls_sample_cnt[class_name] < num_samples_per_cls:
-                    dataset.append(sample)
-                    cls_sample_cnt[class_name]+=1
-
-    return dataset
-
-
-class DecordInit(object):
-    """Using Decord(https://github.com/dmlc/decord) to initialize the video_reader."""
-
-    def __init__(self, num_threads=1, **kwargs):
-        self.num_threads = num_threads
-        self.ctx = decord.cpu(0)
-        self.kwargs = kwargs
-        
-    def __call__(self, filename):
-        """Perform the Decord initialization.
-        Args:
-            results (dict): The resulting dict to be modified and passed
-                to the next transform in pipeline.
-        """
-        reader = decord.VideoReader(filename,
-                                    ctx=self.ctx,
-                                    num_threads=self.num_threads)
-        return reader
-
-    def __repr__(self):
-        repr_str = (f'{self.__class__.__name__}('
-                    f'sr={self.sr},'
-                    f'num_threads={self.num_threads})')
-        return repr_str
-
-
+def is_image_file(filename):
+    return any(filename.endswith(extension) for extension in IMG_EXTENSIONS)
 class FaceForensicsImages(torch.utils.data.Dataset):
-    """Load the FaceForensics video files
-    
-    Args:
-        target_video_len (int): the number of video frames will be load.
-        align_transform (callable): Align different videos in a specified size.
-        temporal_sample (callable): Sample the target length of a video.
-    """
-
-    def __init__(self,
-                 configs,
-                 transform=None,
-                 temporal_sample=None):
+    def __init__(self, configs, transform, temporal_sample=None, train=True):
         self.configs = configs
         self.data_path = configs.data_path
-        self.video_lists = get_filelist(configs.data_path)
         self.transform = transform
         self.temporal_sample = temporal_sample
         self.target_video_len = self.configs.num_frames
-        self.v_decoder = DecordInit()
-        self.video_length = len(self.video_lists)
+        self.frame_interval = self.configs.frame_interval
+        self.data_all, self.video_frame_all = self.load_video_frames(self.data_path)
 
-        # ffs video frames
-        self.video_frame_path = configs.frame_data_path
-        self.video_frame_txt = configs.frame_data_txt
-        self.video_frame_files = [frame_file.strip() for frame_file in open(self.video_frame_txt)]
-        random.shuffle(self.video_frame_files)
+        # sky video frames
+        random.shuffle(self.video_frame_all)
         self.use_image_num = configs.use_image_num
-        self.image_tranform = transforms.Compose([
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
-        ])
 
     def __getitem__(self, index):
-        video_index = index % self.video_length
-        path = self.video_lists[video_index]
-        vframes, aframes, info = torchvision.io.read_video(filename=path, pts_unit='sec', output_format='TCHW')
+
+        video_index = index % self.video_num
+        vframes = self.data_all[video_index]
         total_frames = len(vframes)
-        
+
         # Sampling video frames
         start_frame_ind, end_frame_ind = self.temporal_sample(total_frames)
         assert end_frame_ind - start_frame_ind >= self.target_video_len
-        frame_indice = np.linspace(start_frame_ind, end_frame_ind-1, self.target_video_len, dtype=int)
-        video = vframes[frame_indice]
-        # videotransformer data proprecess
-        video = self.transform(video) # T C H W
+        frame_indice = np.linspace(start_frame_ind, end_frame_ind-1, num=self.target_video_len, dtype=int) # start, stop, num=50
+
+        select_video_frames = vframes[frame_indice[0]: frame_indice[-1]+1: self.frame_interval] 
+
+        video_frames = []
+        for path in select_video_frames:
+            video_frame = torch.as_tensor(np.array(Image.open(path), dtype=np.uint8, copy=True)).unsqueeze(0)
+            video_frames.append(video_frame)
+        video_clip = torch.cat(video_frames, dim=0).permute(0, 3, 1, 2)
+        video_clip = self.transform(video_clip)
 
         # get video frames
         images = []
+
         for i in range(self.use_image_num):
             while True:
                 try:      
-                    image = Image.open(os.path.join(self.video_frame_path, self.video_frame_files[index+i])).convert("RGB")
-                    image = self.image_tranform(image).unsqueeze(0)
+                    video_frame_path = self.video_frame_all[index+i]
+                    image = torch.as_tensor(np.array(Image.open(video_frame_path), dtype=np.uint8, copy=True)).unsqueeze(0)
                     images.append(image)
                     break
                 except Exception as e:
-                    traceback.print_exc()
-                    index = random.randint(0, len(self.video_frame_files) - self.use_image_num)
-        images =  torch.cat(images, dim=0)
-        
+                    index = random.randint(0, self.video_frame_num - self.use_image_num)
+
+        images =  torch.cat(images, dim=0).permute(0, 3, 1, 2)
+        images = self.transform(images)
         assert len(images) == self.use_image_num
 
-        video_cat = torch.cat([video, images], dim=0)
+        video_cat = torch.cat([video_clip, images], dim=0)
 
         return {'video': video_cat, 'video_name': 1}
 
     def __len__(self):
-        return len(self.video_frame_files)
+        return self.video_frame_num
+    
+    def load_video_frames(self, dataroot):
+        data_all = []
+        frames_all = []
+        frame_list = os.walk(dataroot)
+        for _, meta in enumerate(frame_list):
+            root = meta[0]
+            try:
+                frames = sorted(meta[2], key=lambda item: int(item.split('.')[0].split('_')[-1]))
+            except:
+                print(meta[0]) # root
+                print(meta[2]) # files
+            frames = [os.path.join(root, item) for item in frames if is_image_file(item)]
+            if len(frames) > max(0, self.target_video_len * self.frame_interval): # need all > (16 * frame-interval) videos
+            # if len(frames) >= max(0, self.target_video_len): # need all > 16 frames videos
+                data_all.append(frames)
+                for frame in frames:
+                    frames_all.append(frame)
+        self.video_num = len(data_all)
+        self.video_frame_num = len(frames_all)
+        return data_all, frames_all
 
 
 if __name__ == '__main__':

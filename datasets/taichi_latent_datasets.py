@@ -10,6 +10,7 @@ import json
 from PIL import Image
 from decord import VideoReader
 from decord import cpu, gpu
+from tqdm import tqdm
 
 
 class TaichiLatent(data.Dataset):
@@ -54,11 +55,16 @@ class TaichiLatent(data.Dataset):
                 if file.lower().endswith('.pt'):
                     latent_files.append(os.path.join(root, file))
 
-        for latent_path in latent_files:
-            latent = torch.load(latent_path, weights_only=False)
-            n_frames = latent.shape[0]
-            if n_frames > 0:
+        if len(latent_files) >= 1_000_000:
+            for latent_path in tqdm(latent_files):
+                n_frames = self.target_video_len
                 data_all.append((latent_path, n_frames))
+        else:
+            for latent_path in tqdm(latent_files):
+                latent = torch.load(latent_path, weights_only=False)
+                n_frames = latent.shape[0]
+                if n_frames > 0:
+                    data_all.append((latent_path, n_frames))
         return data_all
 
     

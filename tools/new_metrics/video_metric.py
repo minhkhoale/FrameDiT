@@ -160,7 +160,7 @@ class VideoMetric(nn.Module):
         # we split the batch into smaller chunks and update metrics for each chunk.
         self.total_sample += preds.shape[0]
         preds_split = preds.chunk(self.split_batch_size, dim=0)
-        target_split = target.chunk(self.split_batch_size, dim=0)
+        target_split = target.chunk(self.split_batch_size, dim=0) if target is not None else [None] * len(preds_split)
         assert len(preds_split) == len(
             target_split
         ), "Batch size of preds and target must be the same."
@@ -182,18 +182,23 @@ class VideoMetric(nn.Module):
             )
 
         # replace all NaNs with 0 / clamp to [0, 1] / convert to float32
-        preds, target = map(
-            lambda x: torch.clamp(torch.nan_to_num(x, nan=0.0), 0.0, 1.0).to(
-                torch.float32
-            ),
-            (preds, target),
-        )
-        # overwrite context frames of generated videos with the corresponding frames of the real videos
-        preds = torch.where(
-            rearrange(context_mask, "t -> 1 t 1 1 1"),
-            target,
-            preds,
-        )
+        # preds, target = map(
+        #     lambda x: torch.clamp(torch.nan_to_num(x, nan=0.0), 0.0, 1.0).to(
+        #         torch.float32
+        #     ),
+        #     (preds, target),
+        # )
+        preds = torch.clamp(torch.nan_to_num(preds, nan=0.0), 0.0, 1.0).to(torch.float32)
+        if target is not None:
+            target = torch.clamp(
+                torch.nan_to_num(target, nan=0.0), 0.0, 1.0
+            ).to(torch.float32)
+            # overwrite context frames of generated videos with the corresponding frames of the real videos
+            preds = torch.where(
+                rearrange(context_mask, "t -> 1 t 1 1 1"),
+                target,
+                preds,
+            )
         # update I3D-dependent video-wise metrics
         i3d_dependent_metrics = self.I3D_DEPENDENT_METRICS.intersection(self.keys())
         if i3d_dependent_metrics:
@@ -201,11 +206,14 @@ class VideoMetric(nn.Module):
             if {VideoMetricType.FVD, VideoMetricType.IS}.intersection(self.keys()):
                 fake_features = self._extract_i3d_features(preds)
             if {VideoMetricType.FVD, VideoMetricType.REAL_IS}.intersection(self.keys()):
-                real_features = self._extract_i3d_features(target)
+                real_features = self._extract_i3d_features(target) if target is not None else None
+
             for metric_type, module in self._filtered_items(self.I3D_DEPENDENT_METRICS):
                 if metric_type == VideoMetricType.FVD:
                     module.update(fake_features, real_features)
                 else:
+                    if (not metric_type == VideoMetricType.REAL_IS) and target is None:
+                        continue
                     module.update(
                         fake_features
                         if metric_type == VideoMetricType.IS
@@ -223,10 +231,13 @@ class VideoMetric(nn.Module):
             module.update(preds, target)
 
         # reshape a batch of videos to a batch of image frames
-        preds, target = map(
-            lambda x: rearrange(x[:, ~context_mask], "b t c h w -> (b t) c h w"),
-            (preds, target),
-        )
+        # preds, target = map(
+        #     lambda x: rearrange(x[:, ~context_mask], "b t c h w -> (b t) c h w"),
+        #     (preds, target),
+        # )
+        preds = rearrange(preds[:, ~context_mask], "b t c h w -> (b t) c h w")
+        if target is not None:
+            target = rearrange(target[:, ~context_mask], "b t c h w -> (b t) c h w")
 
         # update frame-wise metrics
         for metric_type, module in self._filtered_items(self.FRAME_WISE_METRICS):

@@ -31,7 +31,6 @@ class TaichiImages(data.Dataset):
         self.use_image_num = configs.use_image_num
 
     def __getitem__(self, index):
-
         video_index = index % self.video_num
         vframes = self.data_all[video_index]
         total_frames = len(vframes)

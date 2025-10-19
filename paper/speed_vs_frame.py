@@ -17,27 +17,35 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.ticker import ScalarFormatter, AutoMinorLocator
 from pathlib import Path
+import seaborn as sns
 
-def set_pub_style():
+def set_cvpr_style():
+    """
+    Set consistent publication-quality (CVPR-style) plotting parameters.
+    Clean sans-serif font, high DPI, color-blind-safe palette.
+    """
+    sns.set_theme(context="paper", style="whitegrid", palette="colorblind")
+
     plt.rcParams.update({
-        "figure.figsize": (5.0, 3.3),      # single-column CVPR-ish
-        "figure.dpi": 300,
-        "savefig.dpi": 300,
+        "figure.figsize": (5.0, 3.3),      # single-column width
+        "figure.dpi": 400,
+        "savefig.dpi": 400,
         "savefig.bbox": "tight",
-        "font.size": 12,
-        "axes.titlesize": 13,
-        "axes.labelsize": 12,
+        "font.family": "sans-serif",
+        "font.sans-serif": ["Helvetica", "Arial", "DejaVu Sans"],
+        "font.size": 11,
+        "axes.titlesize": 11,
+        "axes.labelsize": 11,
         "legend.fontsize": 10,
-        "xtick.labelsize": 11,
-        "ytick.labelsize": 11,
-        "lines.linewidth": 2.0,
-        "lines.markersize": 5.5,
-        "axes.grid": True,
-        "grid.alpha": 0.25,
-        "grid.linestyle": "-",
+        "xtick.labelsize": 10,
+        "ytick.labelsize": 10,
         "axes.spines.top": False,
         "axes.spines.right": False,
-        "figure.autolayout": False,        # we’ll call tight_layout() explicitly
+        "lines.linewidth": 2.0,
+        "lines.markersize": 3.5,
+        "grid.alpha": 0.25,
+        "grid.linestyle": "-",
+        "figure.autolayout": False,
     })
 
 
@@ -46,100 +54,77 @@ def beautify_ax(ax, x_label, y_label, title=None, logy=False):
     ax.set_ylabel(y_label)
     if title:
         ax.set_title(title)
-    # scientific formatter but readable
     ax.yaxis.set_major_formatter(ScalarFormatter(useMathText=True))
-    ax.ticklabel_format(axis='y', style='sci', scilimits=(3, 3))
-    # minor ticks
     ax.xaxis.set_minor_locator(AutoMinorLocator())
     ax.yaxis.set_minor_locator(AutoMinorLocator())
-    # optional log scale for wide ranges
+    ax.ticklabel_format(axis='y', style='sci', scilimits=(3, 3))
+
     if logy:
         ax.set_yscale("log")
-        # reset formatter for log scale to plain numbers
-        ax.yaxis.set_major_formatter(ScalarFormatter())
-        ax.ticklabel_format(axis='y', style='plain')
-    # consistent grid
-    ax.grid(True, which='both', axis='both', alpha=0.25)
+    ax.grid(True, which="major", alpha=0.3)
+    ax.grid(True, which="minor", alpha=0.1)
 
 
 def plot_metric_lines(df, y_col, out_basepath: Path, title: str, y_label: str, logy=False):
-    fig, ax = plt.subplots(figsize=(3.6, 2.8), dpi=400)  # smaller figure
+    set_cvpr_style()
+    fig, ax = plt.subplots(figsize=(3.6, 2.8), dpi=400)
+
     for m in df['model'].unique():
         sdf = df[df['model'] == m].sort_values('num_frames')
-        ax.plot(sdf['num_frames'], sdf[y_col], marker='o', label=m, linewidth=1.8)
+        ax.plot(sdf['num_frames'], sdf[y_col], marker='o', label=m)
 
-    beautify_ax(ax, x_label='Number of frames', y_label=y_label, title=title, logy=logy)
-
-    # ✅ smaller, tighter legend INSIDE top-right corner
-    ax.legend(
-        loc='upper left',
-        frameon=True,
-        framealpha=0.9,
-        facecolor='white',
-        edgecolor='0.8',
-        fontsize=9,
-        handlelength=2.5,
-        handletextpad=0.4
-    )
-
+    beautify_ax(ax, "Number of Frames", y_label, title, logy)
+    ax.legend(loc='upper left', frameon=False)
     fig.tight_layout(pad=0.2)
-    png_path = out_basepath.with_suffix(".png")
-    pdf_path = out_basepath.with_suffix(".pdf")
-    fig.savefig(png_path, bbox_inches='tight', pad_inches=0.02)
-    fig.savefig(pdf_path, bbox_inches='tight', pad_inches=0.02)
+
+    for ext in (".pdf", ".png"):
+        fig.savefig(out_basepath.with_suffix(ext), bbox_inches="tight", pad_inches=0.02)
     plt.close(fig)
-    print(f"Saved: {png_path} and {pdf_path}")
+    print(f"Saved: {out_basepath}.pdf and .png")
 
 
 def plot_combined_three(df: pd.DataFrame, save_path: Path):
     """
-    Create one figure with 3 aligned subplots:
-    (a) FLOPs, (b) Latency, (c) Memory vs #Frames
+    Create one clean 3-panel figure for FLOPs, Latency, Memory vs #Frames.
+    Ideal for CVPR figures.
     """
-    set_pub_style()
+    set_cvpr_style()
     metrics = [
-        ("flops_GF", "MACs", "(a)"),
+        ("flops_GF", "GFLOPs", "(a)"),
         ("latency_avg_ms", "Latency (ms)", "(b)"),
-        ("peak_mem_MB", "Peak Memory (MB)", "(c)")
+        ("peak_mem_MB", "Peak Memory (MB)", "(c)"),
     ]
 
-    fig, axes = plt.subplots(1, 3, figsize=(9.0, 2.8), dpi=400, sharex=True)
-    colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+    fig, axes = plt.subplots(1, 3, figsize=(8.6, 2.6), dpi=400, sharex=True)
+    palette = sns.color_palette("colorblind")
 
-    for i, (y_col, y_label, sublabel) in enumerate(metrics):
+    for i, (y_col, y_label, tag) in enumerate(metrics):
         ax = axes[i]
-        # skip metrics missing data
         if df[y_col].isna().all():
             ax.set_visible(False)
             continue
 
         for j, m in enumerate(df['model'].unique()):
             sdf = df[df['model'] == m].sort_values('num_frames')
-            ax.plot(sdf['num_frames'], sdf[y_col],
-                    marker='o', linewidth=1.8,
-                    label=m if i == 1 else None,  # show legend only once (middle)
-                    color=colors[j % len(colors)])
-        beautify_ax(ax, x_label='Number of frames' if i == 1 else '',
-                    y_label=y_label, title='', logy=False)
-        ax.text(0.02, 0.95, sublabel, transform=ax.transAxes,
-                fontsize=11, fontweight='bold', va='top', ha='left')
-        if i != 0:
-            ax.yaxis.label.set_visible(True)
-        if i > 0:
-            ax.yaxis.set_tick_params(labelleft=True)
-        if i == 1:
-            ax.legend(loc='upper left', fontsize=9, frameon=True,
-                      framealpha=0.9, handlelength=2.4, handletextpad=0.4)
+            ax.plot(
+                sdf['num_frames'], sdf[y_col],
+                marker='o', linewidth=2.0,
+                label=m if i == 1 else None,  # legend once (middle)
+                color=palette[j % len(palette)]
+            )
 
-    # global formatting
-    # fig.suptitle("Efficiency of Transformer Variants with Factorized, Matrix, and Full Attention", fontsize=13)
-    fig.tight_layout(pad=0.6, w_pad=1.6)
-    png_path = save_path.with_suffix(".png")
-    pdf_path = save_path.with_suffix(".pdf")
-    fig.savefig(png_path, bbox_inches='tight', pad_inches=0.03)
-    fig.savefig(pdf_path, bbox_inches='tight', pad_inches=0.03)
+        beautify_ax(ax, "Number of Frames" if i == 1 else "", y_label)
+        ax.text(0.93, 0.04, tag, transform=ax.transAxes,
+                fontsize=10, va='top', ha='left')
+
+        if i == 1:
+            ax.legend(loc='upper left', frameon=False)
+
+    fig.tight_layout(pad=0.6, w_pad=1.2)
+    for ext in (".pdf", ".png"):
+        fig.savefig(save_path.with_suffix(ext), bbox_inches="tight", pad_inches=0.02)
     plt.close(fig)
-    print(f"Saved combined figure: {png_path} and {pdf_path}")
+    print(f"Saved combined figure: {save_path}.pdf and .png")
 
 
 # -----------------------------
@@ -336,7 +321,7 @@ def run_all(
 if __name__ == "__main__":
     # Replace with your DiT variant
     results = []
-    set_pub_style()
+    set_cvpr_style()
 
     # latent_size = 16
     # num_classes = None

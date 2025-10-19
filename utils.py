@@ -140,10 +140,17 @@ def get_experiment_dir(root_dir, args):
         root_dir += '-Xfor'
     if args.gradient_checkpointing:
         root_dir += '-Gc'
-    if args.mixed_precision:
+    if args.mixed_precision or args.mixed_precision_16bit:
         root_dir += '-Amp'
     if args.image_size == 512:
         root_dir += '-512'
+    if args.load_latent:
+        root_dir += '-loadlatent'
+    else:
+        root_dir += '-loadpixel'
+    if args.num_frames != 16:
+        root_dir += f'-{args.num_frames}frame'
+
     return root_dir
 
 #################################################################################

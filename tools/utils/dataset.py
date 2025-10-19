@@ -299,14 +299,22 @@ class VideoFramesFolderDataset(Dataset):
         if self.subsample_factor > 1 and self.load_n_consecutive is None:
             raise NotImplementedError("Can do subsampling only when loading consecutive frames.")
 
-        listdir_full_paths = lambda d: sorted([os.path.join(d, x) for x in os.listdir(d)])
         name = os.path.splitext(os.path.basename(self._path))[0]
 
         if os.path.isdir(self._path):
             self._type = 'dir'
-            # We assume that the depth is 2
-            self._all_objects = {o for d in listdir_full_paths(self._path) for o in (([d] + listdir_full_paths(d)) if os.path.isdir(d) else [d])}
-            self._all_objects = {os.path.relpath(o, start=os.path.dirname(self._path)) for o in {self._path}.union(self._all_objects)}
+            # Recursively collect all files under the provided path. We store
+            # paths relative to the parent of `self._path` to preserve the
+            # previous behavior where entries looked like
+            # '<root_dir_name>/video/frame.png'. This keeps compatibility
+            # with `_open_file` which joins against `os.path.dirname(self._path)`.
+            root_parent = os.path.dirname(self._path)
+            self._all_objects = set()
+            for root, _dirs, files in os.walk(self._path):
+                for fname in files:
+                    full = os.path.join(root, fname)
+                    rel = os.path.relpath(full, start=root_parent)
+                    self._all_objects.add(rel)
         elif self._file_ext(self._path) == '.zip':
             self._type = 'zip'
             self._all_objects = set(self._get_zipfile().namelist())
@@ -314,30 +322,35 @@ class VideoFramesFolderDataset(Dataset):
             raise IOError('Path must be either a directory or point to a zip archive')
 
         PIL.Image.init()
+        # Build a mapping from a video's directory to its frame files.
+        # The previous code assumed a fixed depth of 2 and iterated
+        # through paths using a `curr_d` cursor which broke for deeper
+        # hierarchies (depth=3). Instead, group image files by their
+        # parent directory so arbitrary nesting is supported.
         self._video_dir2frames = {}
         objects = sorted([d for d in self._all_objects])
-        root_path_depth = len(os.path.normpath(objects[0]).split(os.path.sep))
-        curr_d = objects[1] # Root path is the first element
-
-        for o in objects[1:]:
-            curr_obj_depth = len(os.path.normpath(o).split(os.path.sep))
-
-            if self._file_ext(o) in PIL.Image.EXTENSION:
-                assert o.startswith(curr_d), f"Object {o} is out of sync. It should lie inside {curr_d}"
-                assert curr_obj_depth == root_path_depth + 2, "Frame images should be inside directories"
-                if not curr_d in self._video_dir2frames:
-                    self._video_dir2frames[curr_d] = []
-                self._video_dir2frames[curr_d].append(o)
-            elif self._file_ext(o) == 'json':
-                assert curr_obj_depth == root_path_depth + 1, "Classes info file should be inside the root dir"
-                pass
+        # Group image files by parent directory
+        for o in objects:
+            ext = self._file_ext(o)
+            # Normalize JSON extension check and ignore dataset.json here
+            if ext in PIL.Image.EXTENSION:
+                parent = os.path.dirname(o)
+                # Use the parent directory as the video key. If file is
+                # directly under root, parent can be ''. Keep it as-is to
+                # preserve relative paths used elsewhere.
+                if parent not in self._video_dir2frames:
+                    self._video_dir2frames[parent] = []
+                self._video_dir2frames[parent].append(o)
+            elif ext == '.json':
+                # dataset.json / class info handled elsewhere; ignore here
+                continue
             else:
-                # We encountered a new directory
-                assert curr_obj_depth == root_path_depth + 1, f"Video directories should be inside the root dir. {o} is not."
-                if curr_d in self._video_dir2frames:
-                    sorted_files = sorted(self._video_dir2frames[curr_d])
-                    self._video_dir2frames[curr_d] = sorted_files
-                curr_d = o
+                # Non-image file types are ignored for frame grouping
+                continue
+        
+        # Sort frames for each video directory and keep deterministic video order
+        for k in list(self._video_dir2frames.keys()):
+            self._video_dir2frames[k] = sorted(self._video_dir2frames[k])
 
         if self.discard_short_videos:
             self._video_dir2frames = {d: fs for d, fs in self._video_dir2frames.items() if len(fs) >= self.load_n_consecutive * self.subsample_factor}
@@ -347,7 +360,9 @@ class VideoFramesFolderDataset(Dataset):
         if len(self._video_idx2frames) == 0:
             raise IOError('No videos found in the specified archive')
 
-        raw_shape = [len(self._video_idx2frames)] + list(self._load_raw_frames(0, [0])[0][0].shape)
+        raw_shape = [len(self._video_idx2frames)] + [3, resolution, resolution]
+        # raw_shape = [len(self._video_idx2frames)] + [3, self.max_num_frames, resolution, resolution]
+
 
         super().__init__(name=name, raw_shape=raw_shape, **super_kwargs)
 
@@ -429,13 +444,38 @@ class VideoFramesFolderDataset(Dataset):
         frames, times = self._load_raw_frames(self._raw_idx[idx], frames_idx=frames_idx)
 
         assert isinstance(frames, np.ndarray)
-        assert list(frames[0].shape) == self.image_shape
+        #assert list(frames[0].shape) == self.image_shape
         assert frames.dtype == np.uint8
         assert len(frames) == len(times)
 
         if self._xflip[idx]:
             assert frames.ndim == 4 # TCHW
             frames = frames[:, :, :, ::-1]
+
+        # resize if needed: First scale to the specified size in equal proportion to the short edge, then center cropping
+        if self.resolution is not None and (frames.shape[2] != self.resolution or frames.shape[3] != self.resolution):
+            resized_frames = []
+            for frame in frames:
+                pil_img = PIL.Image.fromarray(frame.transpose(1, 2, 0))  # CHW to HWC
+                # First scale
+                w, h = pil_img.size
+                if w < h:
+                    new_w = self.resolution
+                    new_h = int(h * self.resolution / w)
+                else:
+                    new_h = self.resolution
+                    new_w = int(w * self.resolution / h)
+                # print('w, h, new_w, new_h, self.resolution:', w, h, new_w, new_h, self.resolution)
+                pil_img = pil_img.resize((new_w, new_h), resample=PIL.Image.BICUBIC)
+                # Then center crop
+                left = (new_w - self.resolution) // 2
+                top = (new_h - self.resolution) // 2
+                right = left + self.resolution
+                bottom = top + self.resolution
+                pil_img = pil_img.crop((left, top, right, bottom))
+                resized_frame = np.array(pil_img).transpose(2, 0, 1)  # HWC to CHW
+                resized_frames.append(resized_frame)
+            frames = np.stack(resized_frames, axis=0)
 
         return {
             'image': frames.copy(),

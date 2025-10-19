@@ -3,11 +3,12 @@ import torch
 from tools import dnnlib
 from tools.new_metrics import VideoMetric, SharedVideoMetricModelRegistry
 from omegaconf import OmegaConf
+from itertools import zip_longest
 import random
 from pprint import pprint
 from tqdm import tqdm
 
-NUM_FRAMES_IN_BATCH = {64: 256, 128: 128, 256: 128, 512: 64, 1024: 32}
+NUM_FRAMES_IN_BATCH = {64: 256, 128: 64, 256: 64, 512: 64, 1024: 32}
 
 def check_if_video_folder(path: str) -> bool:
     # if folder contains all video files, return True
@@ -96,6 +97,9 @@ def cal_metrics(
 
     # data_length = len(real_dataset)
     num_items = len(fake_dataset)
+    num_real = len(real_dataset)
+    if num_real < num_items:
+        num_items = num_real
     # item_subset = random.sample(range(data_length), num_items) # added by xin, randomly selected 2048 videos
 
     print('num_items:', num_items)
@@ -108,18 +112,25 @@ def cal_metrics(
     )
     fake_loader = torch.utils.data.DataLoader(
         dataset=fake_dataset,
-        sampler=random.sample(range(len(fake_dataset)), num_items),
+        # sampler=random.sample(range(len(fake_dataset)), num_items),
         batch_size=NUM_FRAMES_IN_BATCH[resolution],
         num_workers=4
     )
+    print('len(fake_loader):', len(fake_loader))
+    print('len(real_loader):', len(real_loader))
 
-    for real_batch, fake_batch in tqdm(zip(real_loader, fake_loader)):
-        assert_video(real_batch['image'])
+    # TODO: should handle the case when n_real < n_fake
+
+    for real_batch, fake_batch in tqdm(zip_longest(real_loader, fake_loader, fillvalue=None)):
+        #assert_video(real_batch['image'])
         assert_video(fake_batch['image'])
-    
-        real_videos = real_batch['image'].to(device).float() / 255.0
+
+        real_videos = real_batch['image'].to(device).float() / 255.0 if real_batch is not None else None
         fake_videos = fake_batch['image'].to(device).float() / 255.0
-        metrics(real_videos, fake_videos)
+
+        print('real_videos.shape:', real_videos.shape if real_videos is not None else None)
+        print('fake_videos.shape:', fake_videos.shape)
+        metrics(fake_videos, real_videos)
     
     result = metrics.log('final') # dict
     max_key_len = max(len(k) for k in result)
@@ -165,7 +176,8 @@ if __name__ == "__main__":
     num_frames = get_num_frames(args.fake_data_path)
     print(f'Number of frames in the videos: {num_frames}')
 
-    metrics = ['vbench', 'fvd', 'is', 'fid', 'lpips', 'mse', 'ssim', 'psnr']
+    # metrics = ['vbench', 'fvd', 'is', 'fid', 'lpips', 'mse', 'ssim', 'psnr']
+    metrics = ['fvd']
     cal_metrics(
         metrics=metrics, 
         num_frames=num_frames,

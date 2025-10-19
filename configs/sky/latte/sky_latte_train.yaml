@@ -2,8 +2,8 @@
 dataset: "sky"
 
 data_path: "/scratch/s224075134/temporal_diffusion/datasets/video/sky_timelapse/sky_train/"
-latent_path: "/scratch/s224075134/temporal_diffusion/datasets/video/sky_timelapse_latent_32_kl_f8_autoencoder/sky_train"
-load_latent: True
+latent_path: 
+load_latent: False
 
 vae: "./configs/vae/autoencoder_kl.yaml"
 
@@ -17,7 +17,7 @@ num_frames: 16
 image_size: 256 # choices=[256, 512]
 in_channels: 4
 num_sampling_steps: 250
-frame_interval: 3
+frame_interval: 1
 fixed_spatial: False
 attention_bias: True
 learn_sigma: True

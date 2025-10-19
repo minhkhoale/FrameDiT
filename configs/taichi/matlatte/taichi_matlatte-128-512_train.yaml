@@ -9,7 +9,7 @@ vae: "./configs/vae/autoencoder_kl.yaml"
 
 # save and load
 results_dir: "./results"
-pretrained: 
+pretrained: /scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/results/taichi256/009-MatLatte-XL-128-512-2-F16S3-taichi256-no_load_latent/checkpoints/0390000.pt
 
 # model config: 
 model: MatLatte-XL/128-512/2

@@ -2,7 +2,7 @@
 dataset: "taichi"
 
 data_path: 
-latent_path: "/scratch/s224075134/temporal_diffusion/datasets/video/taichi_latent_32_kl_f8_autoencoder/train"
+latent_path: "/scratch/s224075134/temporal_diffusion/datasets/video/taichi_latent_32_kl_f8_autoencoder_bilinear_flip_h100/train"
 load_latent: True
 
 vae: "./configs/vae/autoencoder_kl.yaml"
