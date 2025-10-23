@@ -262,16 +262,37 @@ def initial_scan(env: RunEnv, paths: Paths, real_data_path: Path, sampler_args: 
         print(f"[warn] Checkpoints dir does not exist: {paths.ckpt_dir}")
         return
 
-    ckpts = sorted(paths.ckpt_dir.glob("*.pt"), reverse=reverse)
-    print('[info] Found checkpoints:', [f.name for f in ckpts])
-    for f in ckpts:
-        ckpt_step = extract_step_from_ckpt(f)
-        if ckpt_step is None or ckpt_step % frequency != 0:
-            print(f"[info] Skipping checkpoint (invalid step or frequency): {f.name}")
-            continue
-        if not already_processed(f, paths.state_file):
-            print(f"[info] Processing existing checkpoint: {f.name}")
-            process_checkpoint(env, paths, f, real_data_path, sampler_args, metrics_resolution=resolution)
+    # Repeatedly glob the checkpoint dir and process any newly discovered
+    # eligible checkpoints. This loop continues until a full pass finds
+    # no new checkpoints to process. A short sleep prevents busy-waiting
+    # when files are still being written.
+    while True:
+        ckpts = sorted(paths.ckpt_dir.glob("*.pt"), reverse=reverse)
+        print('[info] Found checkpoints:', [f.name for f in ckpts])
+
+        any_processed = False
+        for f in ckpts:
+            ckpt_step = extract_step_from_ckpt(f)
+            if ckpt_step is None or ckpt_step % frequency != 0:
+                print(f"[info] Skipping checkpoint (invalid step or frequency): {f.name}")
+                continue
+            if not already_processed(f, paths.state_file):
+                print(f"[info] Processing existing checkpoint: {f.name}")
+                try:
+                    process_checkpoint(env, paths, f, real_data_path, sampler_args, metrics_resolution=resolution)
+                    any_processed = True
+                    break
+                except Exception as e:
+                    # Log and continue so one bad checkpoint doesn't stop the scan
+                    print(f"[error] Exception while processing {f.name}: {e}")
+
+        if not any_processed:
+            # No new checkpoints processed in this pass -> we're done
+            break
+
+        # Allow a brief pause so files being written on disk can settle and
+        # to avoid tight looping while waiting for new checkpoints.
+        time.sleep(0.5)
 
 
 def watch_checkpoints(env: RunEnv, paths: Paths, real_data_path: Path, sampler_args: SamplerArgs) -> None:

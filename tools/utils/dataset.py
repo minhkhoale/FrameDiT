@@ -13,7 +13,7 @@ import zipfile
 import json
 import random
 from typing import Tuple
-
+import torchvision.transforms.functional as TVF
 import numpy as np
 import PIL.Image
 import torch
@@ -457,24 +457,12 @@ class VideoFramesFolderDataset(Dataset):
             resized_frames = []
             for frame in frames:
                 pil_img = PIL.Image.fromarray(frame.transpose(1, 2, 0))  # CHW to HWC
-                # First scale
-                w, h = pil_img.size
-                if w < h:
-                    new_w = self.resolution
-                    new_h = int(h * self.resolution / w)
-                else:
-                    new_h = self.resolution
-                    new_w = int(w * self.resolution / h)
-                # print('w, h, new_w, new_h, self.resolution:', w, h, new_w, new_h, self.resolution)
-                pil_img = pil_img.resize((new_w, new_h), resample=PIL.Image.BICUBIC)
-                # Then center crop
-                left = (new_w - self.resolution) // 2
-                top = (new_h - self.resolution) // 2
-                right = left + self.resolution
-                bottom = top + self.resolution
-                pil_img = pil_img.crop((left, top, right, bottom))
-                resized_frame = np.array(pil_img).transpose(2, 0, 1)  # HWC to CHW
-                resized_frames.append(resized_frame)
+                w, h = frames.shape[2], frames.shape[3]
+                min_size = min(w,h)
+                frame = TVF.center_crop(pil_img, output_size=(min_size, min_size))
+                frame = TVF.resize(frame, size=self.resolution, interpolation=PIL.Image.LANCZOS)
+                frame = np.array(frame).transpose(2,0,1)
+                resized_frames.append(frame)
             frames = np.stack(resized_frames, axis=0)
 
         return {

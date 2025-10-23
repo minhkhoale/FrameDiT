@@ -3,8 +3,8 @@
 #SBATCH --partition=gpu-large
 #SBATCH --job-name=Sky-FusedMatLatteIMG-XL-128-512-Concat
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=2
-#SBATCH --gpus=2
+#SBATCH --ntasks-per-node=4
+#SBATCH --gpus=4
 #SBATCH --constraint=gpu-h100
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=6

@@ -223,6 +223,7 @@ class Latte(nn.Module):
         learn_sigma=True,
         extras=2,
         attention_mode='math',
+        **kwargs
     ):
         super().__init__()
         self.learn_sigma = learn_sigma

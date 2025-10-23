@@ -39,7 +39,7 @@ num_workers: 8
 log_every: 50
 lr_warmup_steps: 0
 resume_from_checkpoint:
-gradient_accumulation_steps: 2 # TODO
+gradient_accumulation_steps: 4 # TODO
 num_classes: 101
 
 # low VRAM and speed up training

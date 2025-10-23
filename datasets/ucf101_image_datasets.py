@@ -80,10 +80,9 @@ class UCF101Images(torch.utils.data.Dataset):
         images = []
         image_names = []
         for i in range(self.use_image_num):
-            #while True:
-                #try:      
+            while True:
+                try:      
                     video_frame_path = self.video_frame_all[index+i]
-                    #image = decord.VideoReader(video_frame_path, ctx=decord.cpu(0)).get_batch([frame_id]).asnumpy()[0]
                     image = Image.open(video_frame_path).convert('RGB')
                     image = torch.from_numpy(np.array(image)).permute(2, 0, 1).unsqueeze(0)  # 1 H W C
                     image = self.image_tranform(image)  # 1 C H W
@@ -91,10 +90,10 @@ class UCF101Images(torch.utils.data.Dataset):
 
                     image_class_name = video_frame_path.split('/')[-3].lower()
                     image_names.append(str(self.class_to_idx[image_class_name]))
-                    #break
-                #except Exception as e:
+                    break
+                except Exception as e:
                     # print(f"Error loading image frame: {e}. Retrying with next frame.")
-                    # index = random.randint(0, self.video_frame_num - self.use_image_num)
+                    index = random.randint(0, self.video_frame_num - self.use_image_num)
 
         images =  torch.cat(images, dim=0)
         assert len(images) == self.use_image_num

@@ -150,6 +150,9 @@ def get_experiment_dir(root_dir, args):
         root_dir += '-loadpixel'
     if args.num_frames != 16:
         root_dir += f'-{args.num_frames}frame'
+    
+    if hasattr(args, 'flip_aug') and args.flip_aug == False:
+        root_dir += f'-noflipaug'
 
     return root_dir
 

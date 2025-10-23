@@ -16,7 +16,6 @@ from .taichi_datasets import Taichi
 from .taichi_latent_datasets import TaichiLatent
 from .taichi_image_datasets import TaichiImages
 from .taichi_image_latent_datasets import TaichiImagesLatent
-from .taichi_preprocess_datasets import TaichiPreprocess
 
 
 def get_dataset(args):
@@ -111,11 +110,17 @@ def get_dataset(args):
                 transform = transforms.Compose([])
                 datset_class = TaichiImagesLatent
             else:
-                transform = transforms.Compose([
-                    video_transforms.ToTensorVideo(), # TCHW
-                    video_transforms.RandomHorizontalFlipVideo(),
-                    transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
-                ])
+                if hasattr(args, 'flip_aug') and args.flip_aug:
+                    transform = transforms.Compose([
+                        video_transforms.ToTensorVideo(), # TCHW
+                        video_transforms.RandomHorizontalFlipVideo(),
+                        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
+                    ])
+                else:
+                    transform = transforms.Compose([
+                        video_transforms.ToTensorVideo(), # TCHW
+                        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
+                    ])
                 datset_class = TaichiImages
         case 'taichi_whole':
             if args.image_size < 256:
@@ -177,4 +182,5 @@ def get_dataset(args):
         case _:
             raise NotImplementedError(args.dataset)
 
+    print('transform', transform)
     return datset_class(args, transform=transform, temporal_sample=temporal_sample)

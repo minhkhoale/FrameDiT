@@ -59,6 +59,7 @@ def cal_metrics(
     dataset_cfg = OmegaConf.create({'max_num_frames': 10000})
 
     class_name = 'tools.utils.dataset.VideoDataset' if check_if_video_folder(real_data_path) else 'tools.utils.dataset.VideoFramesFolderDataset'
+    # class_name = 'tools.utils.dataset.VideoFramesFolderDataset'
     args.dataset_kwargs = dnnlib.EasyDict(
         class_name=class_name,
         path=real_data_path,
@@ -128,8 +129,6 @@ def cal_metrics(
         real_videos = real_batch['image'].to(device).float() / 255.0 if real_batch is not None else None
         fake_videos = fake_batch['image'].to(device).float() / 255.0
 
-        print('real_videos.shape:', real_videos.shape if real_videos is not None else None)
-        print('fake_videos.shape:', fake_videos.shape)
         metrics(fake_videos, real_videos)
     
     result = metrics.log('final') # dict
@@ -171,6 +170,9 @@ if __name__ == "__main__":
     parser.add_argument('--real-sample-factor', type=int, default=6, help='Subsample factor for real videos')
     parser.add_argument('--verbose', action='store_true', help='Whether to print out more information')
     parser.add_argument('--result_file', type=str, help='Path to save the results')
+    parser.add_argument('--fvmd', action='store_true', help='Whether to calculate FVMd metric')
+    parser.add_argument('--fid', action='store_true', help='Whether to calculate FID metric')
+    parser.add_argument('--vbench', action='store_true', help='Whether to calculate VBench metric')
     args = parser.parse_args()
 
     num_frames = get_num_frames(args.fake_data_path)
@@ -178,6 +180,13 @@ if __name__ == "__main__":
 
     # metrics = ['vbench', 'fvd', 'is', 'fid', 'lpips', 'mse', 'ssim', 'psnr']
     metrics = ['fvd']
+    if args.fvmd:
+        metrics.append('fvmd')
+    if args.fid:
+        metrics.extend(['fid', 'is', 'fid', 'lpips', 'mse', 'ssim', 'psnr'])
+    if args.vbench:
+        metrics.append('vbench')
+
     cal_metrics(
         metrics=metrics, 
         num_frames=num_frames,

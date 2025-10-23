@@ -4,6 +4,7 @@ dataset: "taichi_img"
 data_path: "/scratch/s224075134/temporal_diffusion/datasets/video/taichi-hd/taichi-256/frames/train"
 latent_path: 
 load_latent: False
+flip_aug: False
 
 vae: "./configs/vae/autoencoder_kl.yaml"
 
@@ -23,7 +24,6 @@ attention_bias: True
 learn_sigma: True
 extras: 1 # [1, 2] 1 unconditional generation, 2 class-conditional generation
 attention_mode: flash
-mixed_precision_16bit: True
 
 # train config:
 load_from_ceph: False # important
@@ -44,6 +44,7 @@ num_classes:
 
 # low VRAM and speed up training TODO
 use_compile: True
+mixed_precision_16bit: True
 mixed_precision: False
 enable_xformers_memory_efficient_attention: False
 gradient_checkpointing: False

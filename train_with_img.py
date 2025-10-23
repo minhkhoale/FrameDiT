@@ -211,6 +211,10 @@ def main(args):
     ema.eval()  # EMA model should always be in eval mode
 
     if args.mixed_precision_16bit:
+        logger.info("Using mixed precision training")
+        logger.info("Using mixed precision training")
+        logger.info("Using mixed precision training")
+        logger.info("Using mixed precision training")
         scaler = torch.amp.GradScaler()
 
     # Variables for monitoring/logging purposes:
