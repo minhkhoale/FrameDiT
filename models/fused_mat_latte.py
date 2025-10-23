@@ -125,6 +125,9 @@ class MatrixLinear(nn.Module):
 
             case _:
                 raise NotImplementedError(f"Unknown u_type: {u_type}")
+        
+        if u_type == 'softmax':
+            self.u_temperature = nn.Parameter(torch.ones(1, **factory_kwargs))
 
         self.w = nn.Parameter(torch.empty((in_features[1], out_features[1]), **factory_kwargs))
 
@@ -141,7 +144,7 @@ class MatrixLinear(nn.Module):
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         if self.u_type == 'softmax':
-            x = matrix_mul_softmax(input, self.u, self.w)
+            x = matrix_mul_softmax(input, self.u / self.u_temperature, self.w)
         elif self.u_type == 'normalized_l1':
             x = matrix_mul_normalized_l1(input, self.u, self.w)
         elif self.u_type == 'normalized_l2':

@@ -104,6 +104,7 @@ class MatrixLinear(nn.Module):
         u_type='param',
         device=None,
         dtype=None,
+        **kwargs
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -113,7 +114,7 @@ class MatrixLinear(nn.Module):
         self.u_type = u_type
 
         match u_type:
-            case 'param' | 'softmax' | 'normalized_l1' | 'normalized_l2':
+            case 'param' | 'softmax' | 'normalized_l1' | 'normalized_l2' | 'sparse':
                 self.u = nn.Parameter(torch.empty((in_features[0], out_features[0]), **factory_kwargs))
             case 'identity':
                 assert in_features[0] == out_features[0], f"in_features[0] size {in_features[0]} must be equal to out_features[0] size {out_features[0]} for identity u"
@@ -121,6 +122,18 @@ class MatrixLinear(nn.Module):
                 self.register_buffer('u', u)
             case _:
                 raise NotImplementedError(f"Unknown u_type: {u_type}")
+
+        if u_type == 'softmax':
+            self.u_temperature = nn.Parameter(torch.ones(1, **factory_kwargs))
+        elif u_type == 'sparse':
+            assert in_features[0] == out_features[0], f"in_features[0] size {in_features[0]} must be equal to out_features[0] size {out_features[0]} for sparse u"
+            u_mask = torch.zeros_like(self.u)
+            bandwidth = kwargs.get('sparse_bandwidth', 16)
+            for i in range(u_mask.shape[0]):
+                start = max(0, i - bandwidth // 2)
+                end = min(u_mask.shape[1], i + bandwidth // 2)
+                u_mask[i, start:end] = 1.0
+            self.register_buffer('u_mask', u_mask)
 
         self.w = nn.Parameter(torch.empty((in_features[1], out_features[1]), **factory_kwargs))
 
@@ -137,11 +150,13 @@ class MatrixLinear(nn.Module):
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         if self.u_type == 'softmax':
-            x = matrix_mul_softmax(input, self.u, self.w)
+            x = matrix_mul_softmax(input, self.u / self.u_temperature, self.w)
         elif self.u_type == 'normalized_l1':
             x = matrix_mul_normalized_l1(input, self.u, self.w)
         elif self.u_type == 'normalized_l2':
             x = matrix_mul_normalized_l2(input, self.u, self.w)
+        elif self.u_type == 'sparse':
+            x = matrix_mul(input, self.u * self.u_mask, self.w)
         else:
             x = matrix_mul(input, self.u, self.w)
         # x = matrix_mul_one_side(input, self.w)
@@ -174,6 +189,7 @@ class MatrixAttention(nn.Module):
         bias_type='matrix',
         u_type='param',
         attention_mode='math',
+        **kwargs
     ):
         super().__init__()
         assert qk_col_dim % num_col_heads == 0, "qk_col_dim must be divisible by num_col_heads"
@@ -196,10 +212,10 @@ class MatrixAttention(nn.Module):
         self.qk_head_col_dim = self.qk_col_dim // num_col_heads
         self.v_head_col_dim = self.v_col_dim // num_col_heads
 
-        self.linear_q = MatrixLinear((self.col_dim, self.row_dim), (self.qk_col_dim, self.row_dim), bias=self.use_bias, bias_type=bias_type, u_type=u_type)
-        self.linear_k = MatrixLinear((self.col_dim, self.row_dim), (self.qk_col_dim, self.row_dim), bias=self.use_bias, bias_type=bias_type, u_type=u_type)
-        self.linear_v = MatrixLinear((self.col_dim, self.row_dim), (self.v_col_dim, self.row_dim), bias=self.use_bias, bias_type=bias_type, u_type=u_type)
-        self.proj_v = MatrixLinear((self.v_col_dim, self.row_dim), (self.col_dim, self.row_dim), bias=self.use_bias, bias_type=bias_type, u_type=u_type)
+        self.linear_q = MatrixLinear((self.col_dim, self.row_dim), (self.qk_col_dim, self.row_dim), bias=self.use_bias, bias_type=bias_type, u_type=u_type, **kwargs)
+        self.linear_k = MatrixLinear((self.col_dim, self.row_dim), (self.qk_col_dim, self.row_dim), bias=self.use_bias, bias_type=bias_type, u_type=u_type, **kwargs)
+        self.linear_v = MatrixLinear((self.col_dim, self.row_dim), (self.v_col_dim, self.row_dim), bias=self.use_bias, bias_type=bias_type, u_type=u_type, **kwargs)
+        self.proj_v = MatrixLinear((self.v_col_dim, self.row_dim), (self.col_dim, self.row_dim), bias=self.use_bias, bias_type=bias_type, u_type=u_type, **kwargs)
 
         self.scale = (self.qk_head_col_dim*self.head_row_dim)**-0.5
 
@@ -488,6 +504,7 @@ class MatLatte(nn.Module):
             num_row_heads=num_row_heads,
             u_type=kwargs.get('u_type', 'param'),
             bias_type=kwargs.get('bias_type', 'matrix'),
+            sparse_bandwidth=kwargs.get('sparse_bandwidth'),
         )
 
         self.blocks = nn.ModuleList([
