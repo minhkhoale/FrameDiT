@@ -79,6 +79,7 @@ class Dataset(torch.utils.data.Dataset):
             self._raw_idx = np.tile(self._raw_idx, 2)
             self._xflip = np.concatenate([self._xflip, np.ones_like(self._xflip)])
 
+
     @staticmethod
     def _file_ext(fname):
         return os.path.splitext(fname)[1].lower()
@@ -460,7 +461,7 @@ class VideoFramesFolderDataset(Dataset):
                 w, h = frames.shape[2], frames.shape[3]
                 min_size = min(w,h)
                 frame = TVF.center_crop(pil_img, output_size=(min_size, min_size))
-                frame = TVF.resize(frame, size=self.resolution, interpolation=PIL.Image.LANCZOS)
+                frame = TVF.resize(frame, size=self.resolution, interpolation=PIL.Image.BILINEAR)
                 frame = np.array(frame).transpose(2,0,1)
                 resized_frames.append(frame)
             frames = np.stack(resized_frames, axis=0)

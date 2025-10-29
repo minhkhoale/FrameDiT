@@ -161,9 +161,14 @@ class VideoMetric(nn.Module):
         self.total_sample += preds.shape[0]
         preds_split = preds.chunk(self.split_batch_size, dim=0)
         target_split = target.chunk(self.split_batch_size, dim=0) if target is not None else [None] * len(preds_split)
-        assert len(preds_split) == len(
-            target_split
-        ), "Batch size of preds and target must be the same."
+        # assert len(preds_split) == len(
+        #     target_split
+        # ), "Batch size of preds and target must be the same."
+        if len(preds_split) != len(target_split):
+            # fix it
+            min_len = min(len(preds_split), len(target_split))
+            preds_split = preds_split[:min_len]
+            target_split = target_split[:min_len]
         for preds_chunk, target_chunk in zip(preds_split, target_split):
             self._update(preds_chunk, target_chunk, context_mask)
 

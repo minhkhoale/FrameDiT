@@ -80,6 +80,8 @@ def get_real_data_path(dataset_name: str) -> str:
             return '/scratch/s224075134/temporal_diffusion/datasets/video/faceforensics/train/videos/'
         case 'sky_img256':
             return '/scratch/s224075134/temporal_diffusion/datasets/video/sky_timelapse/sky_train'
+        case 'ucf101_img256':
+            return '/scratch/s224075134/temporal_diffusion/datasets/video/ucf101/images/'
         case _:
             raise ValueError(f"Unknown dataset name: {dataset_name}")
 
@@ -94,6 +96,8 @@ def get_real_data_sample_factor(dataset_name: str, num_frames: int) -> int:
         case 'ffs_img256' | 'ffs256':
             return 3
         case 'sky_img256':
+            return 3
+        case 'ucf101_img256':
             return 3
         case _:
             raise ValueError(f"Unknown dataset name: {dataset_name}")

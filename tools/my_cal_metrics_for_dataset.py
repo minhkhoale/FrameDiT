@@ -41,7 +41,15 @@ def cal_metrics(
         realdata_subsample_factor=6,
         gendata_subsample_factor=1,
         result_file=None,
+        seed=None
     ):
+    print('===============================================================')
+    if seed is not None:
+        print(f'Setting random seed to {seed}')
+        random.seed(seed)
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+    
     dnnlib.util.Logger(should_flush=True)
     args = dnnlib.EasyDict(metrics=metrics, verbose=verbose)
 
@@ -173,6 +181,7 @@ if __name__ == "__main__":
     parser.add_argument('--fvmd', action='store_true', help='Whether to calculate FVMd metric')
     parser.add_argument('--fid', action='store_true', help='Whether to calculate FID metric')
     parser.add_argument('--vbench', action='store_true', help='Whether to calculate VBench metric')
+    parser.add_argument('--seed', type=int, default=21, help='Random seed for reproducibility')
     args = parser.parse_args()
 
     num_frames = get_num_frames(args.fake_data_path)
@@ -197,6 +206,7 @@ if __name__ == "__main__":
         verbose=args.verbose, 
         result_file=args.result_file,
         realdata_subsample_factor=args.real_sample_factor,
+        seed=args.seed
     )
 
 
