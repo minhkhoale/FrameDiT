@@ -77,6 +77,9 @@ class BaseFrechetDistance(_FrechetInceptionDistance, ABC):
 
     def _update(self, x: Tensor, real: bool) -> None:
         # pylint: disable=no-member
+        if x is None:
+            return
+
         features = self.extract_features(x)
         self.orig_dtype = features.dtype
         features = features.double()

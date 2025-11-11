@@ -109,6 +109,7 @@ def main(args):
         # text_encoder.to(dtype=torch.float16)
     
     assert args.cfg_scale >= 1.0, "In almost all cases, cfg_scale be >= 1.0"
+    print('args.cfg_scale', args.cfg_scale)
     using_cfg = args.cfg_scale > 1.0
 
     # Create folder to save samples:

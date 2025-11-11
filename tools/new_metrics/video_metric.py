@@ -170,6 +170,9 @@ class VideoMetric(nn.Module):
             preds_split = preds_split[:min_len]
             target_split = target_split[:min_len]
         for preds_chunk, target_chunk in zip(preds_split, target_split):
+            if target_chunk is not None and (preds_chunk.shape != target_chunk.shape):
+                print('Warning: preds_chunk.shape != target_chunk.shape, skipping this chunk')
+                continue
             self._update(preds_chunk, target_chunk, context_mask)
 
     def _update(
@@ -194,16 +197,16 @@ class VideoMetric(nn.Module):
         #     (preds, target),
         # )
         preds = torch.clamp(torch.nan_to_num(preds, nan=0.0), 0.0, 1.0).to(torch.float32)
-        if target is not None:
-            target = torch.clamp(
-                torch.nan_to_num(target, nan=0.0), 0.0, 1.0
-            ).to(torch.float32)
-            # overwrite context frames of generated videos with the corresponding frames of the real videos
-            preds = torch.where(
-                rearrange(context_mask, "t -> 1 t 1 1 1"),
-                target,
-                preds,
-            )
+        # if target is not None:
+        #     target = torch.clamp(
+        #         torch.nan_to_num(target, nan=0.0), 0.0, 1.0
+        #     ).to(torch.float32)
+        #     # overwrite context frames of generated videos with the corresponding frames of the real videos
+        #     preds = torch.where(
+        #         rearrange(context_mask, "t -> 1 t 1 1 1"),
+        #         target,
+        #         preds,
+        #     )
         # update I3D-dependent video-wise metrics
         i3d_dependent_metrics = self.I3D_DEPENDENT_METRICS.intersection(self.keys())
         if i3d_dependent_metrics:
@@ -246,6 +249,15 @@ class VideoMetric(nn.Module):
 
         # update frame-wise metrics
         for metric_type, module in self._filtered_items(self.FRAME_WISE_METRICS):
+            if target is None:
+                # skip LPIPS, MSE
+                if metric_type in {
+                    VideoMetricType.LPIPS,
+                    VideoMetricType.MSE,
+                    VideoMetricType.SSIM,
+                    VideoMetricType.PSNR,
+                }:
+                    continue
             module.update(preds, target)
 
     def log(self, prefix: str):

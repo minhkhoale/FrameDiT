@@ -124,7 +124,8 @@ class MatrixLinear(nn.Module):
                 raise NotImplementedError(f"Unknown u_type: {u_type}")
 
         if u_type == 'softmax':
-            self.u_temperature = nn.Parameter(torch.ones(1, **factory_kwargs))
+            self.u_temperature = nn.Parameter(torch.ones((1, out_features[0]), **factory_kwargs))
+
         elif u_type == 'sparse':
             assert in_features[0] == out_features[0], f"in_features[0] size {in_features[0]} must be equal to out_features[0] size {out_features[0]} for sparse u"
             u_mask = torch.zeros_like(self.u)

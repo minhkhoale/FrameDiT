@@ -79,7 +79,6 @@ class Dataset(torch.utils.data.Dataset):
             self._raw_idx = np.tile(self._raw_idx, 2)
             self._xflip = np.concatenate([self._xflip, np.ones_like(self._xflip)])
 
-
     @staticmethod
     def _file_ext(fname):
         return os.path.splitext(fname)[1].lower()

@@ -220,6 +220,7 @@ class DiT3D(nn.Module):
         learn_sigma=True,
         extras=1,
         attention_mode='math',
+        **kwargs
     ):
         super().__init__()
         self.learn_sigma = learn_sigma

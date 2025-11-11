@@ -121,14 +121,12 @@ class MatrixLinear(nn.Module):
                 self.register_buffer('u', u)
             case 'sparse':
                 self.u = nn.Parameter(torch.empty((in_features[0], out_features[0]), **factory_kwargs))
-                # bandwidth = 
 
             case _:
                 raise NotImplementedError(f"Unknown u_type: {u_type}")
         
         if u_type == 'softmax':
-            self.u_temperature = nn.Parameter(torch.ones(1, **factory_kwargs))
-
+            self.u_temperature = nn.Parameter(torch.ones((1, out_features[0]), **factory_kwargs))
         self.w = nn.Parameter(torch.empty((in_features[1], out_features[1]), **factory_kwargs))
 
         if bias:
@@ -683,7 +681,7 @@ class FusedMatLatte(nn.Module):
         if use_fp16:
             x = x.to(dtype=torch.float16)
 
-        batches, frames, channels, high, weight = x.shape 
+        batches, frames, channels, height, width = x.shape 
         x = rearrange(x, 'b f c h w -> (b f) c h w')
         x = self.x_embedder(x) + self.pos_embed  
         t = self.t_embedder(t, use_fp16=use_fp16)                  
@@ -899,6 +897,9 @@ def FusedMatLatte_XL_256_1024_2_concat(**kwargs):
 def FusedMatLatte_XL_128_512_2_concat(**kwargs):
     return FusedMatLatte_XL_2(qk_col_dim=128, v_col_dim=512, num_col_heads=128, fuse_mode='concat', **kwargs)
 
+def FusedMatLatte_XL_128_512_2_concat_softmax(**kwargs):
+    return FusedMatLatte_XL_2(qk_col_dim=128, v_col_dim=512, num_col_heads=128, fuse_mode='concat', u_type='softmax', **kwargs)
+
 def FusedMatLatte_XL_128_1024_2_concat(**kwargs):
     return FusedMatLatte_XL_2(qk_col_dim=128, v_col_dim=1024, num_col_heads=128, fuse_mode='concat', **kwargs)
 
@@ -958,6 +959,9 @@ def FusedMatLatte_M_16_256_2_concat(**kwargs):
 def FusedMatLatte_M_64_256_2_concat(**kwargs):
     return FusedMatLatte_M_2(qk_col_dim=64, v_col_dim=256, num_col_heads=64, fuse_mode='concat', **kwargs)
 
+def FusedMatLatte_M_64_256_2_concat_softmax(**kwargs):
+    return FusedMatLatte_M_2(qk_col_dim=64, v_col_dim=256, num_col_heads=64, fuse_mode='concat', u_type='softmax', **kwargs)
+
 def FusedMatLatte_M_64_256_2_sum(**kwargs):
     return FusedMatLatte_M_2(qk_col_dim=64, v_col_dim=256, num_col_heads=64, fuse_mode='sum', **kwargs)
 
@@ -1003,9 +1007,11 @@ FusedMatLatte_models = {
     'FusedMatLatte-M/64-256/2-gated': FusedMatLatte_M_64_256_2_gated,
     'FusedMatLatte-M/64-256/2-concat': FusedMatLatte_M_64_256_2_concat,
     'FusedMatLatte-M/64-256/2-sum': FusedMatLatte_M_64_256_2_sum,
+    'FusedMatLatte-M/64-256/2-concat-softmax': FusedMatLatte_M_64_256_2_concat_softmax,
     'FusedMatLatte-M/2-onlylocal': FusedMatLatte_M_2_onlylocal,
 
     'FusedMatLatte-XL/128-512/2-concat': FusedMatLatte_XL_128_512_2_concat,
+    'FusedMatLatte-XL/128-512/2-concat-softmax': FusedMatLatte_XL_128_512_2_concat_softmax,
     'FusedMatLatte-XL/128-1024/2-concat': FusedMatLatte_XL_128_1024_2_concat,
 
     'FusedMatLatte-XL/256-512/2-concat': FusedMatLatte_XL_256_512_2_concat,

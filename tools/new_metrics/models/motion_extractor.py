@@ -10,6 +10,7 @@ from torch import nn
 import torch.nn.functional as F
 from einops import rearrange, repeat
 from .pips2 import Pips
+from time import time
 
 
 class NoTrainPips(Pips):
@@ -23,10 +24,10 @@ class MotionExtractor(nn.Module):
         resolution: int = 256,
         segment_length: int = 16,
         num_points: int = 400,
-        num_iters: int = 16,
+        num_iters: int = 8,
     ):
         super().__init__()
-        self.pips = NoTrainPips.from_pretrained()
+        self.pips = torch.compile(NoTrainPips.from_pretrained())
         self.resolution = resolution
         self.segment_length = segment_length
         self.num_points = num_points
@@ -50,6 +51,7 @@ class MotionExtractor(nn.Module):
             coords, "n d -> b s n d", b=1, s=self.segment_length
         )  # 1, S, N, 2
 
+    # @torch.compile
     def _track_keypoints(self, video_segment: Tensor) -> Tensor:
         B, S, _, H, W = video_segment.shape
         assert B == 1, f"PIPS2 only supports batch size 1, but got {B}"
@@ -91,6 +93,7 @@ class MotionExtractor(nn.Module):
     ) -> Tuple[List[Tensor], List[Tensor]]:
         velocities, accelerations = [], []
         # for start_frame in range(0, video.shape[1], self.segment_length - 1):
+        futures = []
         for start_frame in range(
             0, video.shape[1] - self.segment_length + 1, self.segment_length - 1
         ):
@@ -98,11 +101,27 @@ class MotionExtractor(nn.Module):
             assert (
                 video_segment.shape[1] == self.segment_length
             ), f"Video segment length does not match {self.segment_length}"
-            trajectories = self._track_keypoints(video_segment)
-            velocities.append(self._calc_velocity(trajectories))
-            accelerations.append(self._calc_acceleration(velocities[-1]))
+            # trajectories = self._track_keypoints(video_segment)
+            # velocities.append(self._calc_velocity(trajectories))
+            # accelerations.append(self._calc_acceleration(velocities[-1]))
+            futures.append(torch.jit.fork(self._process_segment, video_segment))
+
+        for fut in futures:
+            vel, acc = torch.jit.wait(fut)
+            velocities.append(vel)
+            accelerations.append(acc)
         # each segment is considered as a separate video
         return velocities, accelerations
+    
+    @torch.inference_mode()
+    def _process_segment(self, seg: Tensor) -> Tuple[Tensor, Tensor]:
+        """
+        Single segment processor (called in parallel via torch.jit.fork)
+        """
+        traj = self._track_keypoints(seg)
+        vel = self._calc_velocity(traj)
+        acc = self._calc_acceleration(vel)
+        return vel, acc
 
     def _compute_histogram(self, vectors: Tensor) -> Tensor:
         """
@@ -112,6 +131,7 @@ class MotionExtractor(nn.Module):
         B, S, N, _ = vectors.shape
         vectors = vectors.reshape(B * S * N, -1)
 
+    @torch.inference_mode()
     def forward(self, videos: Tensor) -> Tensor:
         """
         Args:
@@ -138,7 +158,6 @@ class MotionExtractor(nn.Module):
             all_accelerations.extend(accelerations)
         all_velocities = torch.cat(all_velocities, dim=0)
         all_accelerations = torch.cat(all_accelerations, dim=0)
-
         hist_velocities, hist_accelerations = map(
             lambda x: rearrange(
                 torch.from_numpy(calc_hist(x.cpu().numpy())).to(device),
@@ -236,3 +255,27 @@ def calc_hist(
     histos = np.stack(histos, axis=0)
     histos = histos.reshape(B, MS, MH, MW, angle_bins)
     return histos
+
+
+def calc_hist_torch(vectors: torch.Tensor, cell_size: int = 5, angle_bins: int = 8, cube_frames: int = 4):
+    """
+    GPU version of calc_hist.
+    Args:
+        vectors: (B, S, N, 2)
+    """
+    B, S, N, _ = vectors.shape
+    H = W = int(N ** 0.5)
+    vectors = vectors.view(B, S, H, W, 2)
+
+    # Compute angle and magnitude
+    angle = torch.atan2(vectors[..., 0], vectors[..., 1])  # [-pi, pi]
+    angle_bin = ((angle + torch.pi) / (2 * torch.pi / angle_bins)).long().clamp(0, angle_bins - 1)
+    magnitude = torch.norm(vectors, dim=-1)
+    magnitude = torch.log2(torch.clamp(magnitude + 1, min=1.0))
+    magnitude = magnitude / torch.log2(torch.tensor(256.0, device=magnitude.device))
+
+    # Compute per-angle histogram with bincount
+    hist = torch.zeros((B, angle_bins), device=vectors.device)
+    for b in range(B):
+        hist[b] = torch.bincount(angle_bin[b].flatten(), weights=magnitude[b].flatten(), minlength=angle_bins)
+    return hist

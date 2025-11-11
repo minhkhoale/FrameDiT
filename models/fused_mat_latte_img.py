@@ -121,6 +121,9 @@ class MatrixLinear(nn.Module):
             case _:
                 raise NotImplementedError(f"Unknown u_type: {u_type}")
 
+        if u_type == 'softmax':
+            self.u_temperature = nn.Parameter(torch.ones((1, out_features[0]), **factory_kwargs))
+
         self.w = nn.Parameter(torch.empty((in_features[1], out_features[1]), **factory_kwargs))
 
         if bias:
@@ -136,7 +139,7 @@ class MatrixLinear(nn.Module):
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         if self.u_type == 'softmax':
-            x = matrix_mul_softmax(input, self.u, self.w)
+            x = matrix_mul_softmax(input, self.u / self.u_temperature, self.w)
         elif self.u_type == 'normalized_l1':
             x = matrix_mul_normalized_l1(input, self.u, self.w)
         elif self.u_type == 'normalized_l2':
@@ -744,7 +747,7 @@ class FusedMatLatteIMG(nn.Module):
         x = rearrange(x, '(b f) c h w -> b f c h w', b=batches)
         return x
 
-    def forward_with_cfg(self, x, t, y=None, cfg_scale=7.0, use_fp16=False, text_embedding=None):
+    def forward_with_cfg(self, x, t, y=None, cfg_scale=7.0, use_fp16=False):
         """
         Forward pass of FusedMatLatteIMG, but also batches the unconditional forward pass for classifier-free guidance.
         """
@@ -753,7 +756,7 @@ class FusedMatLatteIMG(nn.Module):
         combined = torch.cat([half, half], dim=0)
         if use_fp16:
             combined = combined.to(dtype=torch.float16)
-        model_out = self.forward(combined, t, y=y, use_fp16=use_fp16, text_embedding=text_embedding)
+        model_out = self.forward(combined, t, y=y, use_fp16=use_fp16)
         # For exact reproducibility reasons, we apply classifier-free guidance on only
         # three channels by default. The standard approach to cfg applies it to all channels.
         # This can be done by uncommenting the following line and commenting-out the line following that.
@@ -906,6 +909,9 @@ def FusedMatLatteIMG_XL_256_1024_2_concat(**kwargs):
 def FusedMatLatteIMG_XL_128_512_2_concat(**kwargs):
     return FusedMatLatteIMG_XL_2(qk_col_dim=128, v_col_dim=512, num_col_heads=128, fuse_mode='concat', **kwargs)
 
+def FusedMatLatteIMG_XL_128_512_2_concat_softmax(**kwargs):
+    return FusedMatLatteIMG_XL_2(qk_col_dim=128, v_col_dim=512, num_col_heads=128, fuse_mode='concat', u_type='softmax', **kwargs)
+
 def FusedMatLatteIMG_XL_128_1024_2_concat(**kwargs):
     return FusedMatLatteIMG_XL_2(qk_col_dim=128, v_col_dim=1024, num_col_heads=128, fuse_mode='concat', **kwargs)
 
@@ -1013,6 +1019,7 @@ FusedMatLatteIMG_models = {
     'FusedMatLatteIMG-M/2-onlylocal': FusedMatLatteIMG_M_2_onlylocal,
 
     'FusedMatLatteIMG-XL/128-512/2-concat': FusedMatLatteIMG_XL_128_512_2_concat,
+    'FusedMatLatteIMG-XL/128-512/2-concat-softmax': FusedMatLatteIMG_XL_128_512_2_concat_softmax,
     'FusedMatLatteIMG-XL/128-1024/2-concat': FusedMatLatteIMG_XL_128_1024_2_concat,
 
     'FusedMatLatteIMG-XL/256-512/2-concat': FusedMatLatteIMG_XL_256_512_2_concat,
@@ -1029,22 +1036,3 @@ FusedMatLatteIMG_models = {
     # 'FusedMatLatte-XL/64-512/2': FusedMatLatte_XL_64_512_2, 'FusedMatLatte-XL/128-512/2': FusedMatLatte_XL_128_512_2, 'FusedMatLatte-XL/256-256/2': FusedMatLatte_XL_256_256_2,
     # 'FusedMatLatte-XL/128-1024/2': FusedMatLatte_XL_128_1024_2, 'FusedMatLatte-XL/256-512/2': FusedMatLatte_XL_256_512_2
 
-if __name__ == '__main__':
-
-    import torch
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    img = torch.randn(3, 16, 4, 32, 32).to(device)
-    t = torch.tensor([1, 2, 3]).to(device)
-    y = torch.tensor([1, 2, 3]).to(device)
-    network = FusedMatLatte_XL_2().to(device)
-    from thop import profile 
-    flops, params = profile(network, inputs=(img, t))
-    print('FLOPs = ' + str(flops/1000**3) + 'G')
-    print('Params = ' + str(params/1000**2) + 'M')
-    # y_embeder = LabelEmbedder(num_classes=101, hidden_size=768, dropout_prob=0.5).to(device)
-    # lora.mark_only_lora_as_trainable(network)
-    # out = y_embeder(y, True)
-    # out = network(img, t, y)
-    # print(out.shape)

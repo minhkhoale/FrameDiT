@@ -52,6 +52,10 @@ class LearnedPerceptualImagePatchSimilarity(_LearnedPerceptualImagePatchSimilari
 
     def update(self, img1: Tensor, img2: Tensor) -> None:  # type: ignore
         """Update internal states with lpips score."""
+        if (img1 is None) or (img2 is None):
+            Warning('LPIPS img input is None')
+            return
+        
         if not (_valid_img(img1, self.normalize) and _valid_img(img2, self.normalize)):
             raise ValueError(
                 "Expected both input arguments to be normalized tensors with shape [N, 3, H, W]."

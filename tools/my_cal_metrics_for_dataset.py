@@ -8,7 +8,7 @@ import random
 from pprint import pprint
 from tqdm import tqdm
 
-NUM_FRAMES_IN_BATCH = {64: 256, 128: 64, 256: 64, 512: 64, 1024: 32}
+NUM_FRAMES_IN_BATCH = {64: 256, 128: 32, 256: 64, 512: 64, 1024: 32}
 
 def check_if_video_folder(path: str) -> bool:
     # if folder contains all video files, return True
