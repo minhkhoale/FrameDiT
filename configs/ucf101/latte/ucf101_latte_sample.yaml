@@ -31,4 +31,4 @@ negative_name: 101
 
 # ddp sample config
 per_proc_batch_size: 2
-num_fvd_samples: 16
+num_fvd_samples: 2048

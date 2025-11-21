@@ -63,7 +63,7 @@ class TaichiLatent(data.Dataset):
             for latent_path in tqdm(latent_files):
                 latent = torch.load(latent_path, weights_only=False)
                 n_frames = latent.shape[0]
-                if n_frames > 0:
+                if n_frames >= self.temporal_sample.size:
                     data_all.append((latent_path, n_frames))
         return data_all
 

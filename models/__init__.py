@@ -64,6 +64,6 @@ def get_models(args):
         learn_sigma=args.learn_sigma,
         in_channels=args.in_channels,
         extras=args.extras,
-        gradient_checkpointing=args.gradient_checkpointing,
+        gradient_checkpointing=args.get('gradient_checkpointing', False),
         attention_mode=args.get('attention_mode', 'math'),
     )

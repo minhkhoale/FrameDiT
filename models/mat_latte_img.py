@@ -100,6 +100,7 @@ class MatrixLinear(nn.Module):
         u_type='param',
         device=None,
         dtype=None,
+        **kwargs
     ):
         factory_kwargs = {"device": device, "dtype": dtype}
         super().__init__()
@@ -109,7 +110,7 @@ class MatrixLinear(nn.Module):
         self.u_type = u_type
 
         match u_type:
-            case 'param' | 'softmax' | 'normalized_l1' | 'normalized_l2':
+            case 'param' | 'softmax' | 'normalized_l1' | 'normalized_l2' | 'sparse':
                 self.u = nn.Parameter(torch.empty((in_features[0], out_features[0]), **factory_kwargs))
             case 'identity':
                 assert in_features[0] == out_features[0], f"in_features[0] size {in_features[0]} must be equal to out_features[0] size {out_features[0]} for identity u"
@@ -117,6 +118,19 @@ class MatrixLinear(nn.Module):
                 self.register_buffer('u', u)
             case _:
                 raise NotImplementedError(f"Unknown u_type: {u_type}")
+
+        if u_type == 'softmax':
+            self.u_temperature = nn.Parameter(torch.ones((1, out_features[0]), **factory_kwargs))
+
+        elif u_type == 'sparse':
+            assert in_features[0] == out_features[0], f"in_features[0] size {in_features[0]} must be equal to out_features[0] size {out_features[0]} for sparse u"
+            u_mask = torch.zeros_like(self.u)
+            bandwidth = kwargs.get('sparse_bandwidth', 16)
+            for i in range(u_mask.shape[0]):
+                start = max(0, i - bandwidth // 2)
+                end = min(u_mask.shape[1], i + bandwidth // 2)
+                u_mask[i, start:end] = 1.0
+            self.register_buffer('u_mask', u_mask)
 
         self.w = nn.Parameter(torch.empty((in_features[1], out_features[1]), **factory_kwargs))
 
@@ -133,11 +147,13 @@ class MatrixLinear(nn.Module):
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         if self.u_type == 'softmax':
-            x = matrix_mul_softmax(input, self.u, self.w)
+            x = matrix_mul_softmax(input, self.u / self.u_temperature, self.w)
         elif self.u_type == 'normalized_l1':
             x = matrix_mul_normalized_l1(input, self.u, self.w)
         elif self.u_type == 'normalized_l2':
             x = matrix_mul_normalized_l2(input, self.u, self.w)
+        elif self.u_type == 'sparse':
+            x = matrix_mul(input, self.u * self.u_mask, self.w)
         else:
             x = matrix_mul(input, self.u, self.w)
         # x = matrix_mul_one_side(input, self.w)
@@ -170,6 +186,7 @@ class MatrixAttention(nn.Module):
         bias_type='matrix',
         u_type='param',
         attention_mode='math',
+        **kwargs
     ):
         super().__init__()
         assert qk_col_dim % num_col_heads == 0, "qk_col_dim must be divisible by num_col_heads"
@@ -192,10 +209,10 @@ class MatrixAttention(nn.Module):
         self.qk_head_col_dim = self.qk_col_dim // num_col_heads
         self.v_head_col_dim = self.v_col_dim // num_col_heads
 
-        self.linear_q = MatrixLinear((self.col_dim, self.row_dim), (self.qk_col_dim, self.row_dim), bias=self.use_bias, bias_type=bias_type, u_type=u_type)
-        self.linear_k = MatrixLinear((self.col_dim, self.row_dim), (self.qk_col_dim, self.row_dim), bias=self.use_bias, bias_type=bias_type, u_type=u_type)
-        self.linear_v = MatrixLinear((self.col_dim, self.row_dim), (self.v_col_dim, self.row_dim), bias=self.use_bias, bias_type=bias_type, u_type=u_type)
-        self.proj_v = MatrixLinear((self.v_col_dim, self.row_dim), (self.col_dim, self.row_dim), bias=self.use_bias, bias_type=bias_type, u_type=u_type)
+        self.linear_q = MatrixLinear((self.col_dim, self.row_dim), (self.qk_col_dim, self.row_dim), bias=self.use_bias, bias_type=bias_type, u_type=u_type, **kwargs)
+        self.linear_k = MatrixLinear((self.col_dim, self.row_dim), (self.qk_col_dim, self.row_dim), bias=self.use_bias, bias_type=bias_type, u_type=u_type, **kwargs)
+        self.linear_v = MatrixLinear((self.col_dim, self.row_dim), (self.v_col_dim, self.row_dim), bias=self.use_bias, bias_type=bias_type, u_type=u_type, **kwargs)
+        self.proj_v = MatrixLinear((self.v_col_dim, self.row_dim), (self.col_dim, self.row_dim), bias=self.use_bias, bias_type=bias_type, u_type=u_type, **kwargs)
 
         self.scale = (self.qk_head_col_dim*self.head_row_dim)**-0.5
 
@@ -567,7 +584,7 @@ class MatLatteIMG(nn.Module):
         batches, frames, channels, high, weight = x.shape 
         x = rearrange(x, 'b f c h w -> (b f) c h w')
         x = self.x_embedder(x) + self.pos_embed  
-        t = self.t_embedder(t, use_fp16=use_fp16)                  
+        t = self.t_embedder(t, use_fp16=use_fp16)
         timestep_spatial = repeat(t, 'b d -> (b f) n d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1]+use_image_num) 
         timestep_temp = repeat(t, 'b d -> (b n) f d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1])
 
@@ -581,7 +598,7 @@ class MatLatteIMG(nn.Module):
                 y_image_emb = torch.cat(y_image_emb, dim=0)
                 y_spatial = repeat(y, 'b d -> b f d', f=self.temp_embed.shape[1])
                 y_spatial = torch.cat([y_spatial, y_image_emb], dim=1)
-                y_spatial = rearrange(y_spatial, 'b f d -> (b f) n d', n=self.pos_embed.shape[1])
+                y_spatial = repeat(y_spatial, 'b f d -> (b f) n d', n=self.pos_embed.shape[1])
             else:
                 y_spatial = repeat(y, 'b d -> (b f) n d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1])
             y_temp = repeat(y, 'b d -> (b n) f d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1])
@@ -630,7 +647,7 @@ class MatLatteIMG(nn.Module):
         x = rearrange(x, '(b f) c h w -> b f c h w', b=batches)
         return x
 
-    def forward_with_cfg(self, x, t, y=None, cfg_scale=7.0, use_fp16=False, text_embedding=None):
+    def forward_with_cfg(self, x, t, y=None, cfg_scale=7.0, use_fp16=False):
         """
         Forward pass of MatLatteIMG, but also batches the unconditional forward pass for classifier-free guidance.
         """
@@ -639,7 +656,7 @@ class MatLatteIMG(nn.Module):
         combined = torch.cat([half, half], dim=0)
         if use_fp16:
             combined = combined.to(dtype=torch.float16)
-        model_out = self.forward(combined, t, y=y, use_fp16=use_fp16, text_embedding=text_embedding)
+        model_out = self.forward(combined, t, y=y, use_fp16=use_fp16)
         # For exact reproducibility reasons, we apply classifier-free guidance on only
         # three channels by default. The standard approach to cfg applies it to all channels.
         # This can be done by uncommenting the following line and commenting-out the line following that.
@@ -798,6 +815,12 @@ def MatLatteIMG_XL_256_256_2(**kwargs):
 def MatLatteIMG_XL_256_512_2(**kwargs):
     return MatLatteIMG_XL_2(qk_col_dim=256, v_col_dim=512, num_col_heads=256, **kwargs)
 
+def MatLatteIMG_XL_256_512_2_softmax_u(**kwargs):
+    return MatLatteIMG_XL_2(qk_col_dim=256, v_col_dim=512, num_col_heads=256, u_type='softmax', **kwargs)
+
+def MatLatteIMG_XL_256_1024_2_softmax_u(**kwargs):
+    return MatLatteIMG_XL_2(qk_col_dim=256, v_col_dim=1024, num_col_heads=256, u_type='softmax', **kwargs)
+
 # For image size 128, 64 tokens per frame
 def MatLatteIMG_M_1_256_2(**kwargs):
     return MatLatteIMG_M_2(qk_col_dim=1, v_col_dim=256, num_col_heads=1, **kwargs)
@@ -881,7 +904,8 @@ MatLatteIMG_models = {
     'MatLatteIMG-M/64-256/2-normalized-l1-u': MatLatteIMG_M_64_256_2_normalized_l1_u, 'MatLatteIMG-M/64-256/2-normalized-l2-u': MatLatteIMG_M_64_256_2_normalized_l2_u,
     'MatLatteIMG-M/64-256/2-row-bias': MatLatteIMG_M_64_256_2_row_bias,
     'MatLatteIMG-XL/64-512/2': MatLatteIMG_XL_64_512_2, 'MatLatteIMG-XL/128-512/2': MatLatteIMG_XL_128_512_2, 'MatLatteIMG-XL/256-256/2': MatLatteIMG_XL_256_256_2,
-    'MatLatteIMG-XL/128-1024/2': MatLatteIMG_XL_128_1024_2, 'MatLatteIMG-XL/256-512/2': MatLatteIMG_XL_256_512_2
+    'MatLatteIMG-XL/128-1024/2': MatLatteIMG_XL_128_1024_2, 'MatLatteIMG-XL/256-512/2': MatLatteIMG_XL_256_512_2,
+    'MatLatteIMG-XL/256-512/2-softmax': MatLatteIMG_XL_256_512_2_softmax_u, 'MatLatteIMG-XL/256-1024/2-softmax': MatLatteIMG_XL_256_1024_2_softmax_u,
 }
 
 def test_matrix_vs_vanilla():

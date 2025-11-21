@@ -16,6 +16,7 @@ from .taichi_datasets import Taichi
 from .taichi_latent_datasets import TaichiLatent
 from .taichi_image_datasets import TaichiImages
 from .taichi_image_latent_datasets import TaichiImagesLatent
+from .kinetics_600_dataset import Kinetics600
 
 
 def get_dataset(args):
@@ -178,7 +179,18 @@ def get_dataset(args):
                     transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
                 ])
             return BAIR(args, transform=transform, temporal_sample=temporal_sample)
-        
+        case 'kinetics600':
+            if args.load_latent:
+                transform = transforms.Compose([])
+                datset_class = Kinetics600Latent
+            else:
+                transform = transforms.Compose([
+                    video_transforms.ToTensorVideo(), # TCHW
+                    # video_transforms.RandomHorizontalFlipVideo(),
+                    video_transforms.UCFCenterCropVideo(args.image_size),
+                    transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
+                ])
+                datset_class = Kinetics600
         case _:
             raise NotImplementedError(args.dataset)
 

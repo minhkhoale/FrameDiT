@@ -99,7 +99,6 @@ def main(args):
     sample_size = args.image_size // 8
     args.latent_size = sample_size
     model = get_models(args)
-    print('Model', model)
     
     diffusion = create_diffusion(
         name=args.diffusion_name if 'diffusion_name' in args else 'gaussian_diffusion',
@@ -247,7 +246,11 @@ def main(args):
         resume_step = train_steps % num_update_steps_per_epoch
 
     if args.pretrained:
-        train_steps = int(args.pretrained.split("/")[-1].split('.')[0])
+        try:
+            train_steps = int(args.pretrained.split("/")[-1].split('.')[0])
+        except:
+            train_steps = 0
+            logger.warning(f"Could not parse pretrained step from {args.pretrained}, defaulting to 0")
 
     total_start_time = time()
     for epoch in range(first_epoch, num_train_epochs):

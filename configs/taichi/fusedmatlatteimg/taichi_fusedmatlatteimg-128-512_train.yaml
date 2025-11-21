@@ -10,7 +10,6 @@ vae: "./configs/vae/autoencoder_kl.yaml"
 # save and load
 results_dir: "./results_img"
 pretrained: 
-
 # model config: 
 model: FusedMatLatteIMG-XL/128-512/2-concat
 num_frames: 16
@@ -23,7 +22,6 @@ attention_bias: True
 learn_sigma: True
 extras: 1 # [1, 2] 1 unconditional generation, 2 class-conditional generation
 attention_mode: flash
-mixed_precision_16bit: True
 
 # train config:
 load_from_ceph: False # important
@@ -44,9 +42,10 @@ num_classes:
 
 # low VRAM and speed up training TODO
 use_compile: True
+mixed_precision_16bit: True
 mixed_precision: False
 enable_xformers_memory_efficient_attention: False
 gradient_checkpointing: False
 
 # Wandb logger
-project: vdm
+project: 

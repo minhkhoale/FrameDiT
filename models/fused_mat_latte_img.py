@@ -676,8 +676,6 @@ class FusedMatLatteIMG(nn.Module):
         x = rearrange(x, 'b f c h w -> (b f) c h w')
         x = self.x_embedder(x) + self.pos_embed  
         t = self.t_embedder(t, use_fp16=use_fp16)
-        # print('use_image_num', use_image_num)
-        # print('f', frames, )
         timestep_spatial = repeat(t, 'b d -> (b f) n d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1]+use_image_num) 
         timestep_temp = repeat(t, 'b d -> (b n) f d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1])
 
@@ -699,10 +697,6 @@ class FusedMatLatteIMG(nn.Module):
             text_embedding = self.text_embedding_projection(text_embedding.reshape(batches, -1))
             text_embedding_spatial = repeat(text_embedding, 'b d -> (b f) n d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1])
             text_embedding_temp = repeat(text_embedding, 'b d -> (b n) f d', n=self.pos_embed.shape[1], f=self.temp_embed.shape[1])
-
-        # print('x shape:', x.shape)
-        # print('timestep_spatial shape:', timestep_spatial.shape)
-        # print('timestep_temp shape:', timestep_temp.shape)
 
         for i in range(0, len(self.blocks), 2):
             spatial_block, temp_block = self.blocks[i:i+2]

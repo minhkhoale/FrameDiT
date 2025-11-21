@@ -1,10 +1,11 @@
 #!/bin/bash
 #SBATCH --qos=batch-short
+#SBATCH --partition=gpu-large
 #SBATCH --job-name=Taichi128_FusedMatLatte-32-256-concat
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=4
-#SBATCH --gpus=4
-#SBATCH --constraint=gpu-a100
+#SBATCH --ntasks-per-node=2
+#SBATCH --gpus=2
+#SBATCH --constraint=gpu-h100
 #SBATCH --mem=64GB
 #SBATCH --cpus-per-task=6
 #SBATCH --time=120:00:00

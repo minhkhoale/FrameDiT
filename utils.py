@@ -130,8 +130,8 @@ def clip_grad_norm_(
     return total_norm
 
 def get_experiment_dir(root_dir, args):
-    # if args.pretrained is not None and 'Latte-XL-2-256x256.pt' not in args.pretrained:
-    #     root_dir += '-WOPRE'
+    if args.pretrained is not None:
+        root_dir += '-ImageNetPretrained'
     if args.use_compile:
         root_dir += '-Compile' # speedup by torch compile
     if args.fixed_spatial:

@@ -3,9 +3,9 @@
 #SBATCH --partition=gpu-large
 #SBATCH --job-name=taichi_fusedmatlatteimg-128-512_train
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=2
-#SBATCH --gpus=2
-#SBATCH --constraint=gpu-h200
+#SBATCH --ntasks-per-node=4
+#SBATCH --gpus=4
+#SBATCH --constraint=gpu-h100
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=6
 #SBATCH --time=120:00:00

@@ -9,7 +9,7 @@ vae: "./configs/vae/autoencoder_kl.yaml"
 
 # save and load
 results_dir: "./results_img"
-pretrained: 
+pretrained: results_img/sky_img256/001-FusedMatLatteIMG-XL-128-512-2-concat-F16S3-sky_img256-Compile-Amp-loadpixel/checkpoints/0690000.pt
 
 # model config: 
 model: FusedMatLatteIMG-XL/128-512/2-concat

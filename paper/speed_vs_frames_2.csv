@@ -1,0 +1,2 @@
+model,num_frames,params_M,flops_GF,latency_avg_ms,latency_p50_ms,latency_p95_ms,peak_mem_MB
+DiT3D-M/2,256,230.450192,18146.83152384,480.83457845728844,480.81090045161545,481.1646861489862,26183.03662109375

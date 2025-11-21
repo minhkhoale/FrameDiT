@@ -95,7 +95,7 @@ def get_real_data_sample_factor(dataset_name: str, num_frames: int) -> int:
             elif num_frames == 64:
                 return 3
             elif num_frames == 128:
-                return 1
+                return 3
             raise ValueError(f"Unsupported num_frames {num_frames} for dataset {dataset_name}")
         case 'ffs_img256' | 'ffs256':
             return 3

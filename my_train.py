@@ -26,7 +26,7 @@ from einops import rearrange
 from models import get_models
 from datasets import get_dataset
 from models.clip import TextEmbedder
-from vae import get_vae, encode_video
+from vae import get_vae, encode_video, scale_latents
 from diffusion import create_diffusion
 from omegaconf import OmegaConf
 from torch.utils.data import DataLoader
@@ -115,8 +115,17 @@ def main(args):
     assert args.image_size % 8 == 0, "Image size must be divisible by 8 (for the VAE encoder)."
     sample_size = args.image_size // 8
     args.latent_size = sample_size
-    model = get_models(args)
-    print('Model', model)
+
+    vae = get_vae(OmegaConf.load(args.vae)).to(device)
+
+    # clone args
+    model_args = deepcopy(args)
+    if vae.is_video_vae:
+        num_frames = args.num_frames
+        model_args.num_frames = (num_frames // 4) + 1  # adjust num frames according to VAE frame factor
+        logger.info(f"Using video VAE, adjusted num frames from {num_frames} to {model_args.num_frames}") 
+    model = get_models(model_args)
+    # print('Model', model)
     
     diffusion = create_diffusion(
         name=args.diffusion_name if 'diffusion_name' in args else 'gaussian_diffusion',
@@ -128,8 +137,6 @@ def main(args):
         learn_sigma=args.learn_sigma if 'learn_sigma' in args else True,
     )  # default: 1000 steps, linear noise schedule
     print('diffusion', diffusion)
-
-    vae = get_vae(OmegaConf.load(args.vae)).to(device)
 
     # # use pretrained model?
     if args.pretrained:
@@ -167,6 +174,7 @@ def main(args):
 
     # Freeze vae and text_encoder
     vae.requires_grad_(False)
+    vae.eval()
 
     # Setup data:
     dataset = get_dataset(args)
@@ -251,7 +259,10 @@ def main(args):
     total_start_time = time()
     for epoch in range(first_epoch, num_train_epochs):
         sampler.set_epoch(epoch)
+
+        end = time()
         for step, video_data in enumerate(loader):
+            data_time = time() - end
             # Skip steps until we reach the resumed step
             if args.resume_from_checkpoint and epoch == first_epoch and step < resume_step:
                 continue
@@ -262,7 +273,7 @@ def main(args):
             if not args.load_latent:
                 x = encode_video(vae, x)  # (B,F,C,H,W)
 
-            x = x.mul_(vae.scaler)
+            x = scale_latents(vae, x)
 
             if args.extras == 78: # text-to-video
                 raise 'T2V training are Not supported at this moment!'
@@ -394,9 +405,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, default="./configs/train.yaml")
     parser.add_argument("--debug", action='store_true', help="If true, run in debug mode.")
+    parser.add_argument("--num-workers", type=int)
     args = parser.parse_args()
 
     configs = OmegaConf.load(args.config)
     configs.debug = args.debug
+    if args.num_workers is not None:
+        configs.num_workers = args.num_workers
 
     main(configs)

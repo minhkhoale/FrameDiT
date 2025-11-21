@@ -8,8 +8,8 @@ load_latent: False
 vae: "configs/vae/autoencoder_kl.yaml"
 
 # save and load
-results_dir: "./results"
-pretrained:
+results_dir: "./results_img"
+pretrained: /scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/results/ucf101_img256/003-FusedMatLatteIMG-XL-128-512-2-concat-F16S3-ucf101_img256-Compile-Amp-loadpixel/checkpoints/0480000.pt
 
 # model config: 
 model: FusedMatLatteIMG-XL/128-512/2-concat
@@ -49,3 +49,4 @@ enable_xformers_memory_efficient_attention: False
 gradient_checkpointing: False
 
 project: vdm
+run_id: 11mpzkuu
