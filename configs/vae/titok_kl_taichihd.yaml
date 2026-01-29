@@ -1,0 +1,13 @@
+name: titok_kl
+image_size: 256
+codebook_size: 4096
+token_size: 4
+use_l2_norm: true
+vit_enc_model_size: large
+vit_dec_model_size: large
+vit_enc_patch_size: 16
+vit_dec_patch_size: 16
+num_latent_tokens: 32
+use_l1_loss: True
+scaler: 0.5
+pretrained_model_path: /scratch/s224075134/temporal_diffusion/AR-Diffusion/pretrained/vae_checkpoints/taichi_vae/ckpt_dir/checkpoint-500000/model.safetensors

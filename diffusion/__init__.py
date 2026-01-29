@@ -1,0 +1,61 @@
+# Modified from OpenAI's diffusion repos
+#     GLIDE: https://github.com/openai/glide-text2im/blob/main/glide_text2im/gaussian_diffusion.py
+#     ADM:   https://github.com/openai/guided-diffusion/blob/main/guided_diffusion
+#     IDDPM: https://github.com/openai/improved-diffusion/blob/main/improved_diffusion/gaussian_diffusion.py
+
+from . import gaussian_diffusion as gd
+from .respace import SpacedDiffusion, DifferenceSpacedDiffusion_v0, DifferenceSpacedDiffusion_v1, MeanSpacedDiffusion_v0, SpatialDifferenceSpacedDiffusionV2, TemporalDifferenceSpacedDiffusionV2, space_timesteps
+from .respace_v2 import SpacedGaussianDiffusionV2
+
+
+
+def create_diffusion(
+    timestep_respacing,
+    name='gaussian_diffusion',
+    noise_schedule="linear", 
+    use_kl=False,
+    sigma_small=False,
+    predict_xstart=False,
+    learn_sigma=True,
+    # learn_sigma=False,
+    rescale_learned_sigmas=False,
+    diffusion_steps=1000
+):
+    betas = gd.get_named_beta_schedule(noise_schedule, diffusion_steps)
+    if use_kl:
+        loss_type = gd.LossType.RESCALED_KL
+    elif rescale_learned_sigmas:
+        loss_type = gd.LossType.RESCALED_MSE
+    else:
+        loss_type = gd.LossType.MSE
+    if timestep_respacing is None or timestep_respacing == "":
+        timestep_respacing = [diffusion_steps]
+    
+    class_name = {
+        'gaussian_diffusion': SpacedDiffusion,
+        'difference_gaussian_diffusion_v0': DifferenceSpacedDiffusion_v0,
+        'difference_gaussian_diffusion_v1': DifferenceSpacedDiffusion_v1,
+        'mean_gaussian_diffusion_v0': MeanSpacedDiffusion_v0,
+        'spatial_difference_gaussian_diffusion_v2': SpatialDifferenceSpacedDiffusionV2,
+        'temporal_difference_gaussian_diffusion_v2': TemporalDifferenceSpacedDiffusionV2,
+
+        'gaussian_diffusion_v2': SpacedGaussianDiffusionV2,
+    }[name]
+    return class_name(
+        use_timesteps=space_timesteps(diffusion_steps, timestep_respacing),
+        betas=betas,
+        model_mean_type=(
+            gd.ModelMeanType.EPSILON if not predict_xstart else gd.ModelMeanType.START_X
+        ),
+        model_var_type=(
+            (
+                gd.ModelVarType.FIXED_LARGE
+                if not sigma_small
+                else gd.ModelVarType.FIXED_SMALL
+            )
+            if not learn_sigma
+            else gd.ModelVarType.LEARNED_RANGE
+        ),
+        loss_type=loss_type
+        # rescale_timesteps=rescale_timesteps,
+    )

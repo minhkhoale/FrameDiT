@@ -1,0 +1,2 @@
+2025-10-31 00:02:28.738 | INFO     | fvmd.fvmd:main:75 - Computing FVMD between generation/taichi128/043-MatLatte-M-4-256-2-F16S3-taichi128-novae/ddpm_250/0840000 and /scratch/s224075134/temporal_diffusion/datasets/video_for_metrics/taichi128_reconstruction/train
+2025-10-31 00:26:42.672 | INFO     | fvmd.fvmd:main:75 - Computing FVMD between generation/taichi128/043-MatLatte-M-4-256-2-F16S3-taichi128-novae/ddpm_250/0840000 and /scratch/s224075134/temporal_diffusion/datasets/video_for_metrics/taichi128_reconstruction/train_frame/train

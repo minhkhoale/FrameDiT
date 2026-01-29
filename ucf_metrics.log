@@ -1,0 +1,116 @@
+Number of frames in the videos: 16
+Real data options:
+{'class_name': 'tools.utils.dataset.VideoFramesFolderDataset', 'path': '/scratch/s224075134/temporal_diffusion/datasets/video/ucf101/images', 'cfg': {'max_num_frames': 10000}, 'load_n_consecutive': 16, 'subsample_factor': 3, 'discard_short_videos': True, 'xflip': False, 'resolution': 256, 'use_labels': False}
+Fake data options:
+{'class_name': 'tools.utils.dataset.VideoDataset', 'path': 'generation/ucf101_img256/003-FusedMatLatteIMG-XL-128-512-2-concat-F16S3-ucf101_img256-Compile-Amp-loadpixel/ddpm_250/0480000', 'cfg': {'max_num_frames': 10000}, 'load_n_consecutive': 16, 'load_n_consecutive_random_offset': False, 'subsample_factor': 1, 'xflip': False, 'resolution': 256, 'use_labels': False}
+3
+s224075134/miniconda/envs/latte/lib/python3.12/site-packages/torch/nn/modules/module.py", line 900, in _apply
+    module._apply(fn3
+  File "/scratch/s224075134/miniconda/envs/latte/lib/python3.12/site-packages/torchmetrics/metric.py", line 643, in _apply
+    this._defaults[key] = fn(value)
+                          ^^^^^^^^^
+  File "/scratch/s224075134/miniconda/envs/latte/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1326, in convert
+    return t.to(
+           ^^^^^
+RuntimeError: CUDA error: out of memory
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+
+urn self.sslsocket_class._create(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/s224075134/miniconda/envs/latte/lib/python3.12/ssl.py", line 1041, in _create
+    self.do_handshake()
+  File "/scratch/s224075134/miniconda/envs/latte/lib/python3.12/ssl.py", line 1319, in do_handshake
+    self._sslobj.do_handshake()
+ssl.SSLEOFError: [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1010)
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/scratch/s224075134/miniconda/envs/latte/lib/python3.12/site-packages/urllib3/connectionpool.py", line 787, in urlopen
+    response = self._make_request(
+               ^^^^^^^^^^^^^^^^^^^
+  File "/scratch/s224075134/miniconda/envs/latte/lib/python3.12/site-packages/urllib3/connectionpool.py", line 488, in _make_request
+    raise new_e
+urllib3.exceptions.SSLError: [SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1010)
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/scratch/s224075134/miniconda/envs/latte/lib/python3.12/site-packages/requests/adapters.py", line 644, in send
+    resp = conn.urlopen(
+           ^^^^^^^^^^^^^
+  File "/scratch/s224075134/miniconda/envs/latte/lib/python3.12/site-packages/urllib3/connectionpool.py", line 841, in urlopen
+    retries = retries.increment(
+              ^^^^^^^^^^^^^^^^^^
+  File "/scratch/s224075134/miniconda/envs/latte/lib/python3.12/site-packages/urllib3/util/retry.py", line 519, in increment
+    raise MaxRetryError(_pool, url, reason) from reason  # type: ignore[arg-type]
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+urllib3.exceptions.MaxRetryError: HTTPSConnectionPool(host='huggingface.co', port=443): Max retries exceeded with url: /kiwhansong/DFoT/resolve/main/metrics_models/i3d_torchscript.pt (Caused by SSLError(SSLEOFError(8, '[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1010)')))
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/weka/s224075134/temporal_diffusion/video-diffusion-model-v2/tools/my_cal_metrics_for_dataset.py", line 191, in <module>
+    if args.vbench:
+  File "/weka/s224075134/temporal_diffusion/video-diffusion-model-v2/tools/my_cal_metrics_for_dataset.py", line 51, in cal_metrics
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/weka/s224075134/temporal_diffusion/video-diffusion-model-v2/tools/new_metrics/video_metric.py", line 94, in __init__
+    registry.register_for_metric(metric_type)
+  File "/weka/s224075134/temporal_diffusion/video-diffusion-model-v2/tools/new_metrics/shared_registry.py", line 93, in register_for_metric
+    self._register_if_not_exists(model_type)
+  File "/weka/s224075134/temporal_diffusion/video-diffusion-model-v2/tools/new_metrics/shared_registry.py", line 89, in _register_if_not_exists
+    self._register(model_type)
+  File "/weka/s224075134/temporal_diffusion/video-diffusion-model-v2/tools/new_metrics/shared_registry.py", line 65, in _register
+    self[model_type] = I3D()
+                       ^^^^^
+  File "/weka/s224075134/temporal_diffusion/video-diffusion-model-v2/tools/new_metrics/models/i3d.py", line 25, in __init__
+    self.model = load_pretrained_i3d()
+                 ^^^^^^^^^^^^^^^^^^^^^
+  File "/weka/s224075134/temporal_diffusion/video-diffusion-model-v2/tools/new_metrics/models/i3d.py", line 7, in load_pretrained_i3d
+    model_path = download_from_hf("metrics_models/i3d_torchscript.pt")
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/weka/s224075134/temporal_diffusion/video-diffusion-model-v2/tools/new_metrics/models/utils.py", line 87, in download_from_hf
+    return hf_hub_download(
+           ^^^^^^^^^^^^^^^^
+  File "/scratch/s224075134/miniconda/envs/latte/lib/python3.12/site-packages/huggingface_hub/utils/_deprecation.py", line 101, in inner_f
+    return f(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^
+  File "/scratch/s224075134/miniconda/envs/latte/lib/python3.12/site-packages/huggingface_hub/utils/_validators.py", line 114, in _inner_fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/scratch/s224075134/miniconda/envs/latte/lib/python3.12/site-packages/huggingface_hub/file_download.py", line 1240, in hf_hub_download
+    return _hf_hub_download_to_cache_dir(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/s224075134/miniconda/envs/latte/lib/python3.12/site-packages/huggingface_hub/file_download.py", line 1303, in _hf_hub_download_to_cache_dir
+    (url_to_download, etag, commit_hash, expected_size, head_call_error) = _get_metadata_or_catch_error(
+                                                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/s224075134/miniconda/envs/latte/lib/python3.12/site-packages/huggingface_hub/file_download.py", line 1751, in _get_metadata_or_catch_error
+    metadata = get_hf_file_metadata(
+               ^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/s224075134/miniconda/envs/latte/lib/python3.12/site-packages/huggingface_hub/utils/_validators.py", line 114, in _inner_fn
+    return fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/scratch/s224075134/miniconda/envs/latte/lib/python3.12/site-packages/huggingface_hub/file_download.py", line 1673, in get_hf_file_metadata
+    r = _request_wrapper(
+        ^^^^^^^^^^^^^^^^^
+  File "/scratch/s224075134/miniconda/envs/latte/lib/python3.12/site-packages/huggingface_hub/file_download.py", line 376, in _request_wrapper
+    response = _request_wrapper(
+               ^^^^^^^^^^^^^^^^^
+  File "/scratch/s224075134/miniconda/envs/latte/lib/python3.12/site-packages/huggingface_hub/file_download.py", line 399, in _request_wrapper
+    response = get_session().request(method=method, url=url, **params)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/s224075134/miniconda/envs/latte/lib/python3.12/site-packages/requests/sessions.py", line 589, in request
+    resp = self.send(prep, **send_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/s224075134/miniconda/envs/latte/lib/python3.12/site-packages/requests/sessions.py", line 703, in send
+    r = adapter.send(request, **kwargs)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/s224075134/miniconda/envs/latte/lib/python3.12/site-packages/huggingface_hub/utils/_http.py", line 66, in send
+    return super().send(request, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/scratch/s224075134/miniconda/envs/latte/lib/python3.12/site-packages/requests/adapters.py", line 675, in send
+    raise SSLError(e, request=request)
+requests.exceptions.SSLError: (MaxRetryError("HTTPSConnectionPool(host='huggingface.co', port=443): Max retries exceeded with url: /kiwhansong/DFoT/resolve/main/metrics_models/i3d_torchscript.pt (Caused by SSLError(SSLEOFError(8, '[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1010)')))"), '(Request ID: f7df4d0c-7c93-489f-84ad-39396f072e02)')
