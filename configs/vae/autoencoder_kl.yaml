@@ -1,2 +1,0 @@
-name: autoencoder_kl
-pretrained_model_path: "stabilityai/sd-vae-ft-ema"
