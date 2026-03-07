@@ -217,8 +217,8 @@ def main(args):
     model.train()  # important! This enables embedding dropout for classifier-free guidance
     ema.eval()  # EMA model should always be in eval mode
 
-    if args.mixed_precision_16bit:
-        scaler = torch.amp.GradScaler()
+    # if args.mixed_precision_16bit:
+    #     scaler = torch.amp.GradScaler()
 
     # Variables for monitoring/logging purposes:
     train_steps = 0
@@ -285,10 +285,11 @@ def main(args):
             t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
 
             if args.mixed_precision_16bit:
-                with torch.amp.autocast(dtype=torch.float16, device_type='cuda'):
+                with torch.amp.autocast(dtype=torch.bfloat16, device_type='cuda'):
                     loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
                     loss = loss_dict["loss"].mean() / args.gradient_accumulation_steps
-                scaler.scale(loss).backward()
+                loss.backward()
+                #scaler.scale(loss).backward()
             else:
                 loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
                 loss = loss_dict["loss"].mean() / args.gradient_accumulation_steps
@@ -300,17 +301,17 @@ def main(args):
             lr_scheduler.step()
 
             if train_steps % args.gradient_accumulation_steps == 0 and train_steps > 0:
-                scaler.unscale_(opt)
+                #scaler.unscale_(opt)
                 if train_steps < args.start_clip_iter: # if train_steps >= start_clip_iter, will clip gradient
                     gradient_norm = clip_grad_norm_(model.module.parameters(), args.clip_max_norm, clip_grad=False)
                 else:
                     gradient_norm = clip_grad_norm_(model.module.parameters(), args.clip_max_norm, clip_grad=True)
             
-                if args.mixed_precision_16bit:
-                    scaler.step(opt)
-                    scaler.update()
-                else:
-                    opt.step()
+                # if args.mixed_precision_16bit:
+                #     scaler.step(opt)
+                #     scaler.update()
+                # else:
+                opt.step()
 
                 opt.zero_grad()
                 update_ema(ema, model.module)

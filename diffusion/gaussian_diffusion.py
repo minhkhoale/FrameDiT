@@ -724,11 +724,7 @@ class GaussianDiffusion:
         output = th.where((t == 0), decoder_nll, kl)
         return {"output": output, "pred_xstart": out["pred_xstart"]}
 
-<<<<<<< HEAD
-    def training_losses(self, model, x_start, t, model_kwargs=None, noise=None):
-=======
     def training_losses(self, model, x_start, t, model_kwargs=None, noise=None, channel_first=False):
->>>>>>> 55f319d (code1)
         """
         Compute training losses for a single timestep.
         :param model: the model to evaluate loss on.
@@ -761,12 +757,6 @@ class GaussianDiffusion:
                 terms["loss"] *= self.num_timesteps
         elif self.loss_type == LossType.MSE or self.loss_type == LossType.RESCALED_MSE:
             model_output = model(x_t, t, **model_kwargs)
-<<<<<<< HEAD
-            # try:
-            #     model_output = model(x_t, t, **model_kwargs).sample # for tav unet
-            # except:
-            #     model_output = model(x_t, t, **model_kwargs)
-=======
             try:
                 model_output = model_output.sample # for tav unet
             except:
@@ -777,7 +767,6 @@ class GaussianDiffusion:
                 x_t = x_t.permute(0,2,1,3,4)
                 x_start = x_start.permute(0,2,1,3,4)
                 noise = noise.permute(0,2,1,3,4)
->>>>>>> 55f319d (code1)
 
             if self.model_var_type in [
                 ModelVarType.LEARNED,
@@ -817,15 +806,12 @@ class GaussianDiffusion:
         else:
             raise NotImplementedError(self.loss_type)
 
-<<<<<<< HEAD
-=======
         # print('------------')
         # if 'vb' in terms:
         #     print('vb', terms["vb"].mean().item())
         # print('mse', terms["mse"].mean().item())
         # print('loss', terms["loss"].mean().item())
 
->>>>>>> 55f319d (code1)
         return terms
 
     def _prior_bpd(self, x_start):

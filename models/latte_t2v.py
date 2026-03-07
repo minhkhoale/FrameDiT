@@ -8,11 +8,7 @@ from einops import rearrange, repeat
 from typing import Any, Dict, Optional, Tuple
 from diffusers.models import Transformer2DModel
 from diffusers.utils import USE_PEFT_BACKEND, BaseOutput, deprecate
-<<<<<<< HEAD
-from diffusers.models.embeddings import get_1d_sincos_pos_embed_from_grid, ImagePositionalEmbeddings, PixArtAlphaTextProjection, PatchEmbed, CombinedTimestepSizeEmbeddings
-=======
 from diffusers.models.embeddings import get_1d_sincos_pos_embed_from_grid, ImagePositionalEmbeddings, PixArtAlphaTextProjection, PatchEmbed, PixArtAlphaCombinedTimestepSizeEmbeddings
->>>>>>> 55f319d (code1)
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.models.modeling_utils import ModelMixin
 from diffusers.models.attention import BasicTransformerBlock
@@ -126,24 +122,8 @@ class FeedForward(nn.Module):
                 hidden_states = module(hidden_states)
         return hidden_states
 
-<<<<<<< HEAD
-=======
 
-class MatrixAttentionProcessor:
-    def __call__(
-        self,
-        attn: Attention,
-        hidden_states: torch.FloatTensor,
-        encoder_hidden_states: Optional[torch.FloatTensor] = None,
-        attention_mask: Optional[torch.FloatTensor] = None,
-        temb: Optional[torch.FloatTensor] = None,
-        *args,
-        **kwargs,
-    ):
-        assert encoder_hidden_states is None, "MatrixAttentionProcessor only supports self-attention."
-        batch_size, sequence_length, _ = hidden_states.shape
 
->>>>>>> 55f319d (code1)
 @maybe_allow_in_graph
 class BasicTransformerBlock_(nn.Module):
     r"""
@@ -431,11 +411,7 @@ class AdaLayerNormSingle(nn.Module):
     def __init__(self, embedding_dim: int, use_additional_conditions: bool = False):
         super().__init__()
 
-<<<<<<< HEAD
-        self.emb = CombinedTimestepSizeEmbeddings(
-=======
         self.emb = PixArtAlphaCombinedTimestepSizeEmbeddings(
->>>>>>> 55f319d (code1)
             embedding_dim, size_emb_dim=embedding_dim // 3, use_additional_conditions=use_additional_conditions
         )
 
@@ -605,18 +581,11 @@ class LatteT2V(ModelMixin, ConfigMixin):
                 in_channels=in_channels,
                 embed_dim=inner_dim,
                 interpolation_scale=interpolation_scale,
-            )
+            )   
 
-<<<<<<< HEAD
-=======
-        print('inner_dim', inner_dim)
-        print('num_attention_heads', num_attention_heads)
-        print('attention_head_dim', attention_head_dim)
         # exit(0)
->>>>>>> 55f319d (code1)
         # 3. Define transformers blocks
-        self.transformer_blocks = nn.ModuleList(
-            [
+        self.transformer_blocks = nn.ModuleList([
                 BasicTransformerBlock(
                     inner_dim,
                     num_attention_heads,
@@ -705,6 +674,17 @@ class LatteT2V(ModelMixin, ConfigMixin):
 
     def _set_gradient_checkpointing(self, module, value=False):
         self.gradient_checkpointing = value
+        # print('set gradient checkpointing to', value)
+
+    def enable_gradient_checkpointing(self, n_first_temporal_block=999) -> None:
+        """
+        Activates gradient checkpointing for the current model (may be referred to as *activation checkpointing* or
+        *checkpoint activations* in other frameworks).
+        """
+        if not self._supports_gradient_checkpointing:
+            raise ValueError(f"{self.__class__.__name__} does not support gradient checkpointing.")
+        from functools import partial
+        self.apply(partial(self._set_gradient_checkpointing, value=n_first_temporal_block))
 
 
     def forward(
@@ -759,14 +739,11 @@ class LatteT2V(ModelMixin, ConfigMixin):
             If `return_dict` is True, an [`~models.transformer_2d.Transformer2DModelOutput`] is returned, otherwise a
             `tuple` where the first element is the sample tensor.
         """
-<<<<<<< HEAD
-=======
         # print('hidden_states', hidden_states.shape)
         # print('encoder_hidden_states', encoder_hidden_states.shape)
 
         # print('timestep', timestep.shape)
         # #exit(0)
->>>>>>> 55f319d (code1)
         input_batch_size, c, frame, h, w = hidden_states.shape
         frame = frame - use_image_num
         hidden_states = rearrange(hidden_states, 'b c f h w -> (b f) c h w').contiguous()
@@ -844,7 +821,7 @@ class LatteT2V(ModelMixin, ConfigMixin):
 
         for i, (spatial_block, temp_block) in enumerate(zip(self.transformer_blocks, self.temporal_transformer_blocks)):
 
-            if self.training and self.gradient_checkpointing:
+            if self.training and self.gradient_checkpointing and (i <= self.gradient_checkpointing):
                 hidden_states = torch.utils.checkpoint.checkpoint(
                     spatial_block,
                     hidden_states,
@@ -983,9 +960,5 @@ class LatteT2V(ModelMixin, ConfigMixin):
     
     def get_1d_sincos_temp_embed(self, embed_dim, length):
         pos = torch.arange(0, length).unsqueeze(1)
-<<<<<<< HEAD
-        return get_1d_sincos_pos_embed_from_grid(embed_dim, pos)
-=======
         return get_1d_sincos_pos_embed_from_grid(embed_dim, pos)
         
->>>>>>> 55f319d (code1)

@@ -224,10 +224,7 @@ class LatteV2(nn.Module):
         learn_sigma=True,
         extras=1,
         attention_mode='math',
-<<<<<<< HEAD
-=======
         **kwargs
->>>>>>> 55f319d (code1)
     ):
         super().__init__()
         self.learn_sigma = learn_sigma
@@ -507,8 +504,6 @@ def LatteV2_S_4(**kwargs):
 def LatteV2_S_8(**kwargs):
     return LatteV2(depth=12, hidden_size=384, patch_size=8, num_heads=6, **kwargs)
 
-<<<<<<< HEAD
-=======
 def LatteV2_M_2(**kwargs):
     return LatteV2(depth=12, hidden_size=1024, patch_size=2, num_heads=16, **kwargs)
 
@@ -527,17 +522,13 @@ def LatteV2_M_4(**kwargs):
 def LatteV2_M_8(**kwargs):
     return LatteV2(depth=12, hidden_size=1024, patch_size=8, num_heads=16, **kwargs)
 
->>>>>>> 55f319d (code1)
 
 LatteV2_models = {
     'LatteV2-XL/2': LatteV2_XL_2,  'LatteV2-XL/4': LatteV2_XL_4,  'LatteV2-XL/8': LatteV2_XL_8,
     'LatteV2-L/2':  LatteV2_L_2,   'LatteV2-L/4':  LatteV2_L_4,   'LatteV2-L/8':  LatteV2_L_8,
     'LatteV2-B/2':  LatteV2_B_2,   'LatteV2-B/4':  LatteV2_B_4,   'LatteV2-B/8':  LatteV2_B_8,
     'LatteV2-S/2':  LatteV2_S_2,   'LatteV2-S/4':  LatteV2_S_4,   'LatteV2-S/8':  LatteV2_S_8,
-<<<<<<< HEAD
-=======
     'LatteV2-M/2':  LatteV2_M_2,   'LatteV2-M/2-8': LatteV2_M_2_8, 'LatteV2-M/2-4': LatteV2_M_2_4, 'LatteV2-M/2-1': LatteV2_M_2_1,
->>>>>>> 55f319d (code1)
 }
 
 if __name__ == '__main__':

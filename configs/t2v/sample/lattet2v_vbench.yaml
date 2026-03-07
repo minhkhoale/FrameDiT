@@ -1,0 +1,41 @@
+pretrained_model_path: maxin-cn/Latte-1
+pretrained:
+
+# model config: 
+model:  LatteT2V
+
+num_videos: 5
+num_frames: 16
+video_length: 16
+image_size: [512, 512] # choices=[256, 512]
+in_channels: 4
+num_sampling_steps: 50
+frame_interval: 1
+#fixed_spatial: False
+#attention_bias: True
+learn_sigma: True
+#extras: 2 # [1, 2] 1 unconditional generation, 2 class-conditional generation
+attention_mode: math
+resume_from_checkpoint:
+
+# low VRAM and speed up training
+use_compile: True
+mixed_precision_16bit: True
+mixed_precision: False
+enable_xformers_memory_efficient_attention: False
+gradient_checkpointing: True
+disable_progress_bar: True
+
+beta_start: 0.0001
+beta_end: 0.02
+beta_schedule: "linear"
+variance_type: "learned_range"
+seed: 1
+run_time: 0
+guidance_scale: 7.5
+sample_method: 'DDIM'
+save_img_path: "./sample_videos/vbench/lattet2v"
+# save_img_path: "./sample_videos/t2v/lattet2v"
+enable_vae_temporal_decoder: False
+enable_temporal_attentions: True # LatteT2V-V0: set to False; LatteT2V-V1: set to True
+text_prompt: /scratch/s224075134/temporal_diffusion/VBench/prompts/all_dimension.txt

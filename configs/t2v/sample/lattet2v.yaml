@@ -1,0 +1,45 @@
+pretrained_model_path: maxin-cn/Latte-1
+pretrained:
+
+# model config: 
+model:  LatteT2V
+
+num_frames: 16
+video_length: 16
+image_size: [512, 512] # choices=[256, 512]
+in_channels: 4
+num_sampling_steps: 50
+frame_interval: 1
+#fixed_spatial: False
+#attention_bias: True
+learn_sigma: True
+#extras: 2 # [1, 2] 1 unconditional generation, 2 class-conditional generation
+attention_mode: math
+resume_from_checkpoint:
+
+# low VRAM and speed up training
+use_compile: True
+mixed_precision_16bit: True
+mixed_precision: False
+enable_xformers_memory_efficient_attention: False
+gradient_checkpointing: True
+
+beta_start: 0.0001
+beta_end: 0.02
+beta_schedule: "linear"
+variance_type: "learned_range"
+seed: 1
+run_time: 0
+guidance_scale: 7.5
+sample_method: 'DDIM'
+save_img_path: "./sample_videos/t2v-openvid/lattet2v"
+# save_img_path: "./sample_videos/t2v/lattet2v"
+enable_vae_temporal_decoder: False
+enable_temporal_attentions: True # LatteT2V-V0: set to False; LatteT2V-V1: set to True
+text_prompt: [
+              'The video shows a close-up of a collection of cupcakes with white frosting and various decorations, such as stars and flowers, on a green plate. The cupcakes are arranged in a circular pattern, and the plate is placed on a wooden table. The lighting is soft and warm, highlighting the textures of the frosting and the details of the decorations. The style of the video is simple and elegant, focusing on the cupcakes as the main subject. The background is blurred, drawing attention to the cupcakes. The video does not contain any text or additional elements.', "The video shows a red classic car parked in a lot. The car is shiny and well-maintained, with a chrome grille and a hood ornament. The car's design suggests it is from the 1950s or 1960s. The car is parked next to a brick building, and there are other cars parked in the background. The lot appears to be made of concrete, and there are no people visible in the video. The car is the main focus of the video, and it is shown from a front three-quarter angle. The video does not contain any text or additional objects. The style of the video is straightforward and documentary, with no additional effects or filters applied. The video is likely intended to showcase the car's design and condition.',
+              'The video shows a red sports car parked on a grassy field. The car is sleek and shiny, with a black stripe running down the side. The car's wheels are black with silver rims, and the car is equipped with a black spoiler on the back. The car is parked in front of a tree, and the sky is clear and blue. The car is the main focus of the video, and there are no other objects or people in the scene. The style of the video is a simple, straightforward car showcase, with no additional action or movement. The car is stationary, and the camera is stationary, providing a clear and unobstructed view of the car. The video is likely intended to highlight the car's design and features, and to showcase its performance capabilities.", "The video shows a vintage yellow sports car parked on a street. The car is shiny and well-maintained, with a white stripe running down the side. The car is parked in front of a lush green lawn, and there are trees in the background. The car's hood is up, revealing the engine underneath. The car's wheels are black with silver rims. The car is parked on the side of the street, and there are no other cars visible in the video. The car is the main focus of the video, and there are no other objects or people in the scene. The video is a still image, and there is no movement or action. The style of the video is simple and straightforward, focusing solely on the car and its surroundings.',
+              'The video captures a vibrant red vintage car driving down a tree-lined street. The car, with its shiny exterior and white license plate, is the main focus of the video. The car's journey is set against a backdrop of lush green trees and a clear blue sky, creating a serene and picturesque scene. The car's motion is smooth and steady, suggesting a leisurely drive. The overall style of the video is a blend of realism and nostalgia, evoking a sense of the past while capturing the present.", 'The video captures a blue Mustang car in a parking lot. The car is parked in a parking space, and the camera angle is from the rear of the car, showing the license plate. The car is shiny and well-maintained, with a sleek design. The parking lot is mostly empty, with a few other cars parked in the background. The sky is overcast, and the lighting is soft, suggesting it might be early morning or late afternoon. The overall style of the video is realistic and straightforward, focusing on the car and its surroundings without any additional embellishments or distractions.',
+              "The video showcases a vintage car, painted in a striking combination of green and white, parked on a grassy field. The car's design is reminiscent of the early 20th century, with a long hood and a short rear deck. The car's body is white, while the roof and the fenders are green. The car is equipped with a large chrome grille and a pair of round headlights. The car's wheels are white, and the car is parked on a grassy field. The car is the main focus of the video, and the background is blurred, drawing attention to the car. The video is a still image, and there is no movement or action. The style of the video is simple and straightforward, focusing on the car and its details.", "In the video, a woman is seen in a traditional Ukrainian outfit, complete with a headscarf and a necklace. She is holding a mug in her hands, and her eyes are closed as she smiles. The background is a lush green field, suggesting a peaceful and serene setting. The woman's outfit and the mug she's holding indicate a cultural or traditional context, possibly related to Ukrainian customs or celebrations. The overall style of the video is simple and natural, focusing on the woman and her surroundings without any additional embellishments.",
+              'The video shows a red sports car parked on a grassy field. The car is sleek and shiny, with a black interior. The car is parked in front of a tree, and the sun is setting in the background, casting a warm glow on the scene. The car is stationary, and there are no people or other objects in the frame. The style of the video is realistic, with a focus on the car and the natural surroundings. The video captures the beauty of the car and the serene atmosphere of the setting.', 'The video shows a vintage green convertible car parked on a dirt road in a forested area. The car is a classic model with a shiny exterior and a black soft top. The license plate reads "120 YBY". The car is parked on a dirt road, and the surrounding area is lush with trees and greenery. The car is the main focus of the video, and it is shown in three different angles: a front view, a side view, and a rear view. The car is stationary, and there are no people or other objects in the video. The style of the video is a simple, straightforward car showcase, with no additional elements or actions. The video is likely intended to highlight the cars design and condition.',
+              ]

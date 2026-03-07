@@ -84,12 +84,13 @@ class OpenVidLatentTextDataset(Dataset):
         self._video_cache: Dict[str, torch.Tensor] = {} if cache_video_latents else None
         self._text_cache: Dict[str, Any] = {} if cache_text_latents else None
 
-        df = pd.read_csv(csv_path)[:10000]
-        print('warning: only load 10k samples for test')
-        print('warning: only load 10k samples for test')
-        print('warning: only load 10k samples for test')
-        print('warning: only load 10k samples for test')
-        print('warning: only load 10k samples for test')
+        df = pd.read_csv(csv_path)[:75]
+        # df = df[:10000]
+        print('warning: only load 75 samples for test')
+        print('warning: only load 75 samples for test')
+        print('warning: only load 75 samples for test')
+        print('warning: only load 75 samples for test')
+        print('warning: only load 75 samples for test')
         if id_col not in df.columns:
             raise ValueError(f"CSV missing id_col='{id_col}'. Columns={df.columns.tolist()}")
         if prompt_col not in df.columns:
@@ -184,6 +185,7 @@ class OpenVidLatentTextDataset(Dataset):
         return x
 
     def _load_text_latent(self, path: str) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
+        # max length: 120
         if self._text_cache is not None and path in self._text_cache:
             obj = self._text_cache[path]
         else:
@@ -226,8 +228,8 @@ class OpenVidLatentTextDataset(Dataset):
         sample = {
             "video_id": vid,
             "prompt": prompt,
-            "video": rearrange(vlat, "T C H W -> C T H W"),     # Tensor: C, T, H, W
-            "prompt": tlat,    # Tensor
+            "video_latent": rearrange(vlat, "T C H W -> C T H W"),     # Tensor: C, T, H, W
+            "prompt_embedding": tlat,    # Tensor
             "is_latent": True,
         }
         if self.return_tokens_if_available:

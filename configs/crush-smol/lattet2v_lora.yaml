@@ -1,0 +1,58 @@
+# dataset
+dataset: "latent_text_video"
+latent_path: /scratch/s224075134/temporal_diffusion/datasets/video/crush-smol-merged/crush-smol_processed_t2v
+load_latent: True
+
+# save and load
+results_dir: "./results_t2v"
+pretrained_latte: maxin-cn/Latte-1 # LatteT2V ckpt
+pretrained_model_path: maxin-cn/Latte-1
+pretrained:
+
+vae: "./configs/vae/lattet2v_autoencoder_kl.yaml"
+tokenizer: "./configs/tokenizer/t5.yaml"
+
+use_lora: True
+lora:
+  r: 32
+  lora_alpha: 32
+  lora_dropout: 0.00
+  target_modules:
+    - "to_k"
+    - "to_q"
+    - "to_v"
+    - "to_out.0"
+
+# model config: 
+model: LatteT2V
+num_frames: 16
+video_length: 16
+image_size: 512 # choices=[256, 512]
+in_channels: 4
+num_sampling_steps: 250
+frame_interval: 1
+learn_sigma: True
+resume_from_checkpoint:
+
+# train config:
+save_ceph: True # important
+learning_rate: 1e-4
+ckpt_every: 1000
+clip_max_norm: 1.0
+start_clip_iter: 0
+local_batch_size: 4 # important
+max_train_steps: 50000
+global_seed: 3407
+num_workers: 2
+log_every: 5
+lr_warmup_steps: 0
+gradient_accumulation_steps: 4 # TODO
+
+# low VRAM and speed up training
+use_compile: False
+mixed_precision: float16
+enable_xformers_memory_efficient_attention: False
+gradient_checkpointing: True
+n_checkpointing_blocks: 28
+
+project: 

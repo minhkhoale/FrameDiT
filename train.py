@@ -35,13 +35,8 @@ from diffusers.optimization import get_scheduler
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 from utils import (clip_grad_norm_, create_logger, update_ema, 
-<<<<<<< HEAD
-                   requires_grad, cleanup, create_tensorboard, 
-                   write_tensorboard, setup_distributed,
-=======
                    requires_grad, cleanup, 
                    setup_distributed,
->>>>>>> 55f319d (code1)
                    get_experiment_dir, text_preprocessing)
 import numpy as np
 from transformers import T5EncoderModel, T5Tokenizer

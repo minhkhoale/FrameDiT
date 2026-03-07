@@ -12,7 +12,8 @@ from omegaconf import OmegaConf
 from dataclasses import dataclass
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
-from .tracking_utils import (
+print('os.getcwd()', os.getcwd())
+from tools.tracking_utils import (
     run_cmd,
     wait_for_stable_file,
     already_processed,
@@ -424,13 +425,14 @@ def main():
     print("sampler_args", sampler_args)
 
     if args.ckpt:
-        if not args.ckpt.exists():
+        ckpt_path = Path(args.ckpt)
+        if not ckpt_path.exists():
             print(f"[error] --ckpt not found: {args.ckpt}")
             sys.exit(2)
-        if already_processed(args.ckpt, paths.state_file):
+        if already_processed(ckpt_path, paths.state_file):
             print(f"[info] Already processed: {args.ckpt}")
             sys.exit(0)
-        process_checkpoint(env, paths, args.ckpt, real_data_path, sampler_args)
+        process_checkpoint(env, paths, ckpt_path, real_data_path, sampler_args)
         sys.exit(0)
 
     # Initial pass over existing files
@@ -443,3 +445,33 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+"""
+    parser.add_argument('--experiment-dir', type=str, help='Path to the experiment directory containing checkpoints')
+    parser.add_argument('--generation-dir', type=str, help='Path to the generation directory containing outputs', default='./generation')
+    parser.add_argument('--use-fp16', type=bool, help='Whether to use fp16 sampling', default=False)
+    parser.add_argument('--seed', type=int, help='Random seed for sampling', default=0)
+    parser.add_argument('--sample-method', type=str, help='Sampling method', default='ddpm')
+    parser.add_argument('--num-sampling-steps', type=int, help='Number of sampling steps', default=50)
+    parser.add_argument('--cfg-scale', type=float, help='Classifier-free guidance scale', default=1.0)
+    parser.add_argument('--negative-name', type=str, help='Negative prompt name', default='')
+    parser.add_argument('--batch-size', type=int, help='Batch size for sampling', default=16)
+    parser.add_argument('--num-fvd-samples', type=int, help='Number of samples for FVD', default=2048)
+    parser.add_argument('--ckpt', type=str, help='Path to the checkpoint file', default=None)
+    parser.add_argument('--fps', type=int, help='Frames per second for video', default=8)
+    parser.add_argument('--video-quality', type=int, help='Quality for video encoding (1-10)', default=9)
+    parser.add_argument('--wandb-run-id', type=str, help='W&B run ID for logging', default='')
+    parser.add_argument('--reverse', action='store_true', help='Process existing checkpoints in reverse order')
+    parser.add_argument('--frequency', type=int, help='Checkpoint frequency (unused)', default=10000)
+    parser.add_argument('--start-step', type=int, help='Starting step for processing checkpoints', default=0)
+    parser.add_argument('--resolution', type=int, help='Resolution for metrics computation', default=128)
+
+python tools/track_metrics.py \
+    --experiment-dir results/taichi128/036-Latte-S-2-F16S3-taichi128-Compile-Amp-loadlatent \
+    --generation-dir generation \
+    --use-fp16 \
+    --sample-method ddim \
+    --num-sampling-steps 250 \
+    --frequency 40000 \
+    --start-step 240000
+"""

@@ -138,8 +138,6 @@ class _WrappedModel:
         # if self.rescale_timesteps:
         #     new_ts = new_ts.float() * (1000.0 / self.original_num_steps)
         return self.model(x, new_ts, **kwargs)
-<<<<<<< HEAD
-=======
     
     @property
     def channel_first(self):
@@ -147,7 +145,6 @@ class _WrappedModel:
         print('model class:', type(self.model), self.model.__class__)
         print(self.model.channel_first)
         return getattr(self.model, 'channel_first', False)
->>>>>>> 55f319d (code1)
 
 
 

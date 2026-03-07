@@ -111,12 +111,8 @@ class LattePipeline(DiffusionPipeline):
             tokenizer=tokenizer, text_encoder=text_encoder, vae=vae, transformer=transformer, scheduler=scheduler
         )
 
-        self.vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1)
+        self.vae_scale_factor = 8
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
-<<<<<<< HEAD
-=======
-        print('self.vae_scale_factor', self.vae_scale_factor)
->>>>>>> 55f319d (code1)
 
     # Adapted from https://github.com/PixArt-alpha/PixArt-alpha/blob/master/diffusion/model/utils.py
     def mask_text_embeddings(self, emb, mask):
@@ -194,6 +190,7 @@ class LattePipeline(DiffusionPipeline):
                 return_tensors="pt",
             )
             text_input_ids = text_inputs.input_ids
+            # print('text_input_ids', text_input_ids)
             untruncated_ids = self.tokenizer(prompt, padding="longest", return_tensors="pt").input_ids
 
             if untruncated_ids.shape[-1] >= text_input_ids.shape[-1] and not torch.equal(
@@ -616,10 +613,6 @@ class LattePipeline(DiffusionPipeline):
         # 1. Check inputs. Raise error if not correct
         height = height or self.transformer.config.sample_size * self.vae_scale_factor
         width = width or self.transformer.config.sample_size * self.vae_scale_factor
-<<<<<<< HEAD
-=======
-        print('height, width', height, width)
->>>>>>> 55f319d (code1)
         self.check_inputs(
             prompt, height, width, negative_prompt, callback_steps, prompt_embeds, negative_prompt_embeds
         )
@@ -671,10 +664,6 @@ class LattePipeline(DiffusionPipeline):
             generator,
             latents,
         )
-<<<<<<< HEAD
-=======
-        print('latents', latents.shape)
->>>>>>> 55f319d (code1)
 
         # 6. Prepare extra step kwargs. TODO: Logic should ideally just be moved out of the pipeline
         extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)

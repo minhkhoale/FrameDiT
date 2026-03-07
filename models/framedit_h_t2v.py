@@ -18,7 +18,6 @@ from diffusers.models.embeddings import SinusoidalPositionalEmbedding
 from diffusers.models.normalization import AdaLayerNorm, AdaLayerNormZero
 from diffusers.models.attention_processor import Attention
 from diffusers.models.activations import GEGLU, GELU, ApproximateGELU
-from flash_attn import flash_attn_qkvpacked_func, flash_attn_func
 
 from dataclasses import dataclass
 
@@ -31,7 +30,10 @@ def matrix_mul(x, u, w):
     return torch.einsum('nm,...nd,dk->...mk', u, x, w)
 
 def matrix_mul_softmax(x, u, w):
-    return torch.einsum('nm,...nd,dk->...mk', torch.nn.functional.softmax(u, dim=0), x, w)
+    # print('u', u.shape)
+    # print('torch.nn.functional.softmax(u, dim=0)', torch.nn.functional.softmax(u, dim=0).shape)
+    # exit(0)
+    return torch.einsum('nm,...nd,dk->...mk', torch.nn.functional.softmax(u*1.0, dim=0), x, w)
 
 def matrix_mul_normalized_l2(x, u, w):
     return torch.einsum('nm,...nd,dk->...mk', u/(torch.linalg.norm(u, dim=0, keepdim=True, ord=2) + 1e-6), x, w)
@@ -62,7 +64,7 @@ class MatrixLinear(nn.Module):
         self.u_type = u_type
 
         match u_type:
-            case 'param' | 'softmax' | 'normalized_l1' | 'normalized_l2' | 'sparse':
+            case 'param' | 'softmax' | 'pure-softmax' | 'normalized_l1' | 'normalized_l2' | 'sparse':
                 self.u = nn.Parameter(torch.empty((in_features[0], out_features[0]), **factory_kwargs))
             case 'identity':
                 assert in_features[0] == out_features[0], f"in_features[0] size {in_features[0]} must be equal to out_features[0] size {out_features[0]} for identity u"
@@ -94,12 +96,27 @@ class MatrixLinear(nn.Module):
                     self.bias = nn.Parameter(torch.empty(1, out_features[1], **factory_kwargs))
                 case 'col':
                     self.bias = nn.Parameter(torch.empty(out_features[0], 1, **factory_kwargs))
+                case 'col_row':
+                    self.bias_col = nn.Parameter(torch.empty(out_features[0], 16, **factory_kwargs))
+                    self.bias_row = nn.Parameter(torch.empty(16, out_features[1], **factory_kwargs))
+                    self.register_parameter("bias", None)
+                case 'separate_col_row':
+                    self.bias_col = nn.Parameter(torch.empty(out_features[0], 1, **factory_kwargs))
+                    self.bias_row = nn.Parameter(torch.empty(1, out_features[1], **factory_kwargs))
+                    self.register_parameter("bias", None)
+                # case 'col_row_v2':
+                #     self.bias_col = nn.Parameter(torch.empty(out_features[0], 16, **factory_kwargs))
+                #     self.bias_row = nn.Parameter(torch.empty(16, out_features[1], **factory_kwargs))
+                #     self.register_parameter("bias", None)
+            # print('bias', self.bias.shape)
         else:
             self.register_parameter("bias", None)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         if self.u_type == 'softmax':
             x = matrix_mul_softmax(input, self.u / self.u_temperature, self.w)
+        elif self.u_type == 'pure-softmax':
+            x = matrix_mul_softmax(input, self.u, self.w)
         elif self.u_type == 'normalized_l1':
             x = matrix_mul_normalized_l1(input, self.u, self.w)
         elif self.u_type == 'normalized_l2':
@@ -112,6 +129,9 @@ class MatrixLinear(nn.Module):
         
         if self.bias is not None:
             x += self.bias
+        if self.bias_type == 'col_row':
+            # mul bias_col and bias_row
+            x += torch.matmul(self.bias_col, self.bias_row)
         return x
     
     def __repr__(self):
@@ -172,18 +192,9 @@ class MatrixAttentionProcessor:
             B, T, CN, RD = x.shape
             return rearrange(x, 'B T (C N) (R D) -> B (C R) T (N D)', B=B, T=T, C=attn.num_col_heads, R=attn.num_row_heads)
 
-        # print('hidden_states shape:', hidden_states.shape)
-        # print('query shape before reshape:', query.shape)
-        # print('key shape before reshape:', key.shape)
-        # print('value shape before reshape:', value.shape)
-
         query = reshape_heads(query)
         key = reshape_heads(key)
         value = reshape_heads(value)
-
-        # print('query shape after reshape:', query.shape)
-        # print('key shape after reshape:', key.shape)
-        # print('value shape after reshape:', value.shape)
 
         if attn.attention_mode == 'xformers':
            raise NotImplementedError("MatrixAttention does not support xformers attention mode.")
@@ -202,19 +213,13 @@ class MatrixAttentionProcessor:
             query = rearrange(query, 'B HR T ND -> B T HR ND')
             key = rearrange(key, 'B HR T ND -> B T HR ND')
             value = rearrange(value, 'B HR T ND -> B T HR ND')
+            from flash_attn import flash_attn_qkvpacked_func, flash_attn_func
             x = flash_attn_func(query, key, value, dropout_p=0.0 if not attn.training else attn.attn_drop.p, causal=False)
             x = rearrange(x, 'B T HR ND -> B HR T ND')
         else:
             raise NotImplementedError(f"Unknown attention mode: {attn.attention_mode}")
              
         # Reshape back to original
-        # (B * row_heads * col_heads, hr, hc_v) -> (B, N, C_v)
-        # print('num col heads:', attn.num_col_heads)
-        # print('num row heads:', attn.num_row_heads)
-        # print('qk head col dim:', attn.qk_head_col_dim)
-        # print('v head col dim:', attn.v_head_col_dim)
-        # print('head row dim:', attn.head_row_dim)
-        # print('x shape before reshape back:', x.shape)
         x = rearrange(x, 'B (C R) T (N D) -> B T (C N) (R D)', C=attn.num_col_heads, R=attn.num_row_heads, N=attn.v_head_col_dim, D=attn.head_row_dim)
         
         x = attn.proj_v(x)
@@ -301,6 +306,25 @@ class MatrixAttention(nn.Module):
         # The processor handles the actual forward pass logic
         return self.processor(self, hidden_states, **kwargs)
 
+
+class ContentGate(nn.Module):
+    def __init__(self, dim: int, dim_out: int, g0: float = 0.05):
+        super().__init__()
+        self.proj = nn.Linear(dim, dim_out, bias=True)
+        self.g0 = g0
+
+    def forward(self, c):  # c: (..., D)
+        g = torch.sigmoid(self.proj(c))  # (..., D_out)
+        return g
+
+    def reset_parameters(self):
+        nn.init.zeros_(self.proj.weight)
+        nn.init.constant_(self.proj.bias, math.log(self.g0 / (1 - self.g0)))
+
+    def reset_parameters_to_uniform(self):
+        torch.nn.init.xavier_uniform_(self.proj.weight)
+        nn.init.constant_(self.proj.bias, 0.0)
+
     
 class FusedMatrixAttention(nn.Module):
     def __init__(
@@ -313,6 +337,8 @@ class FusedMatrixAttention(nn.Module):
         num_row_heads: int = 4,
         dropout: float = 0.0,
         use_bias=True,
+        attention_bias=False,
+        upcast_attention=False,
         bias_type='matrix',
         u_type='param',
         fuse_mode='concat',
@@ -329,19 +355,19 @@ class FusedMatrixAttention(nn.Module):
         #     qkv_bias=use_bias,
         #     attention_mode=attention_mode,
         # )
-        
-        self.attention = Attention(
-            query_dim=row_dim,
-            heads=num_row_heads,
-            dim_head=row_dim//num_row_heads,
-            dropout=dropout,
-            bias=use_bias,
-            cross_attention_dim=None,
-            upcast_attention=False
-        )
-        
         self.fuse_mode = fuse_mode
-        assert fuse_mode in ['gated', 'sum', 'concat', 'local'], f"Unknown fuse mode: {fuse_mode}"
+        assert fuse_mode in ['gated', 'gated_no_scale', 'difference_content_based_gated', 'content_based_gated', 'sum', 'concat', 'local', 'global'], f"Unknown fuse mode: {fuse_mode}"
+        
+        if fuse_mode != 'global':
+            self.attention = Attention(
+                query_dim=row_dim,
+                heads=num_row_heads,
+                dim_head=row_dim//num_row_heads,
+                dropout=dropout,
+                bias=attention_bias,
+                cross_attention_dim=None,
+                upcast_attention=upcast_attention
+            )
 
         if self.fuse_mode != 'local':
             self.matrix_attention = MatrixAttention(
@@ -357,26 +383,37 @@ class FusedMatrixAttention(nn.Module):
                 u_type=u_type,
                 attention_mode=attention_mode,
             )
+        
+        if self.fuse_mode not in ['global', 'local']:
             self.norm_local  = nn.LayerNorm(row_dim)
             self.norm_global = nn.LayerNorm(row_dim)
 
         if self.fuse_mode == 'gated':
-            self.alpha = nn.Parameter(torch.zeros(row_dim)) if fuse_mode else None
+            self.alpha = nn.Parameter(torch.ones(row_dim)) # initialize to 1
             self.gamma_local  = nn.Parameter(1e-4 * torch.ones(row_dim))
             self.gamma_global = nn.Parameter(1e-4 * torch.ones(row_dim))
+        elif self.fuse_mode == 'gated_no_scale':
+            self.alpha = nn.Parameter(torch.ones(col_dim, row_dim)) # initialize to 2.5 => sigmoid(2.5) ~ 0.92
+        elif self.fuse_mode in ['difference_content_based_gated', 'content_based_gated']:
+            self.content_gate = ContentGate(dim=row_dim, dim_out=row_dim, g0=0.97)
         elif self.fuse_mode == 'concat':
-            self.output_linear = nn.Linear(2 * row_dim, row_dim)
-    
+            self.output_linear = nn.Linear(2*row_dim, row_dim)
 
-    def forward(self, x):
+
+    def forward(self, x, cross_attention_kwargs=None, disable_matrix_attention=False):
         # x: (B, T, N, D)
+        #return self.attention(x, **cross_attention_kwargs)
         B, T, N, D = x.shape
+
+        if self.fuse_mode == 'global':
+            return self.matrix_attention(x)
+
         local_x = self.attention(rearrange(x, 'B T N D -> (B N) T D'))
         if isinstance(local_x, tuple):
             local_x = local_x[0]
         local_x = rearrange(local_x, '(B N) T D -> B T N D', B=B, N=N)
 
-        if self.fuse_mode == 'local':
+        if self.fuse_mode == 'local' or disable_matrix_attention:
             return local_x
         local_x = self.norm_local(local_x)
 
@@ -387,29 +424,40 @@ class FusedMatrixAttention(nn.Module):
             alpha = torch.sigmoid(self.alpha).view(1, 1, 1, D)
             x = self.gamma_local.view(1,1,1,D) * local_x * alpha \
               + self.gamma_global.view(1,1,1,D) * global_x * (1 - alpha)
+        elif self.fuse_mode == 'gated_no_scale':
+            alpha = torch.sigmoid(self.alpha).view(1, 1, N, D)
+            x = local_x * alpha + global_x * (1 - alpha)
         elif self.fuse_mode == 'sum':
             x = (local_x + global_x)*1/math.sqrt(2)
         elif self.fuse_mode == 'concat':
             x = torch.cat([local_x, global_x], dim=-1)
             x = self.output_linear(x)
+        elif self.fuse_mode == 'content_based_gated':
+            alpha = self.content_gate(x)
+            x = local_x * alpha + global_x * (1 - alpha)
+        elif self.fuse_mode == 'difference_content_based_gated':
+            alpha = self.content_gate(local_x - global_x)
+            x = local_x * alpha + global_x * (1 - alpha)
+
+
         else:
             raise NotImplementedError(f"Unknown fuse mode: {self.fuse_mode}")
         return x
     
-    def __repr__(self):
-        # return col_dim, row_dim, qk_col_dim, v_col_dim, num_col_heads, num_row_heads, fuse_mode, attention_mode
-        # newline for better readability
-        if self.fuse_mode == 'gated':
-            return f"{self.__class__.__name__}(col_dim={self.matrix_attention.col_dim}, row_dim={self.matrix_attention.row_dim}, qk_col_dim={self.matrix_attention.qk_col_dim}, v_col_dim={self.matrix_attention.v_col_dim},\n" \
-                   f" num_col_heads={self.matrix_attention.num_col_heads}, num_row_heads={self.matrix_attention.num_row_heads}, fuse_mode={self.fuse_mode}, attention_mode={self.attention.attention_mode})"
-        elif self.fuse_mode == 'sum':
-            return f"{self.__class__.__name__}(col_dim={self.matrix_attention.col_dim}, row_dim={self.matrix_attention.row_dim}, qk_col_dim={self.matrix_attention.qk_col_dim}, v_col_dim={self.matrix_attention.v_col_dim},\n" \
-                   f" num_col_heads={self.matrix_attention.num_col_heads}, num_row_heads={self.matrix_attention.num_row_heads}, fuse_mode={self.fuse_mode}, attention_mode={self.attention.attention_mode})"
-        elif self.fuse_mode == 'concat':
-            return f"{self.__class__.__name__}(col_dim={self.matrix_attention.col_dim}, row_dim={self.matrix_attention.row_dim}, qk_col_dim={self.matrix_attention.qk_col_dim}, v_col_dim={self.matrix_attention.v_col_dim},\n" \
-                   f" num_col_heads={self.matrix_attention.num_col_heads}, num_row_heads={self.matrix_attention.num_row_heads}, fuse_mode={self.fuse_mode}, attention_mode={self.attention.attention_mode})"
-        elif self.fuse_mode == 'local':
-            return f"{self.__class__.__name__}(num_row_heads={self.attention.num_heads}, attention_mode={self.attention.attention_mode})"
+    # def __repr__(self):
+    #     # return col_dim, row_dim, qk_col_dim, v_col_dim, num_col_heads, num_row_heads, fuse_mode, attention_mode
+    #     # newline for better readability
+    #     if self.fuse_mode == 'gated':
+    #         return f"{self.__class__.__name__}(col_dim={self.matrix_attention.col_dim}, row_dim={self.matrix_attention.row_dim}, qk_col_dim={self.matrix_attention.qk_col_dim}, v_col_dim={self.matrix_attention.v_col_dim},\n" \
+    #                f" num_col_heads={self.matrix_attention.num_col_heads}, num_row_heads={self.matrix_attention.num_row_heads}, fuse_mode={self.fuse_mode}, attention_mode={self.attention.attention_mode})"
+    #     elif self.fuse_mode == 'sum':
+    #         return f"{self.__class__.__name__}(col_dim={self.matrix_attention.col_dim}, row_dim={self.matrix_attention.row_dim}, qk_col_dim={self.matrix_attention.qk_col_dim}, v_col_dim={self.matrix_attention.v_col_dim},\n" \
+    #                f" num_col_heads={self.matrix_attention.num_col_heads}, num_row_heads={self.matrix_attention.num_row_heads}, fuse_mode={self.fuse_mode}, attention_mode={self.attention.attention_mode})"
+    #     elif self.fuse_mode == 'concat':
+    #         return f"{self.__class__.__name__}(col_dim={self.matrix_attention.col_dim}, row_dim={self.matrix_attention.row_dim}, qk_col_dim={self.matrix_attention.qk_col_dim}, v_col_dim={self.matrix_attention.v_col_dim},\n" \
+    #                f" num_col_heads={self.matrix_attention.num_col_heads}, num_row_heads={self.matrix_attention.num_row_heads}, fuse_mode={self.fuse_mode}, attention_mode={self.attention.attention_mode})"
+    #     elif self.fuse_mode == 'local':
+    #         return f"{self.__class__.__name__}(num_row_heads={self.attention.num_heads}, attention_mode={self.attention.attention_mode})"
 
 @maybe_allow_in_graph
 class GatedSelfAttentionDense(nn.Module):
@@ -509,19 +557,6 @@ class FeedForward(nn.Module):
         return hidden_states
 
 
-# class MatrixAttentionProcessor:
-#     def __call__(
-#         self,
-#         attn: Attention,
-#         hidden_states: torch.FloatTensor,
-#         encoder_hidden_states: Optional[torch.FloatTensor] = None,
-#         attention_mask: Optional[torch.FloatTensor] = None,
-#         temb: Optional[torch.FloatTensor] = None,
-#         *args,
-#         **kwargs,
-#     ):
-#         assert encoder_hidden_states is None, "MatrixAttentionProcessor only supports self-attention."
-#         batch_size, sequence_length, _ = hidden_states.shape
 
 @maybe_allow_in_graph
 class BasicTransformerBlock_(nn.Module):
@@ -621,24 +656,27 @@ class BasicTransformerBlock_(nn.Module):
         else:
             self.norm1 = nn.LayerNorm(row_dim, elementwise_affine=norm_elementwise_affine, eps=norm_eps) # go here
 
-        # self.attn1 = Attention(
-        #     query_dim=dim,
-        #     heads=num_attention_heads,
-        #     dim_head=attention_head_dim,
-        #     dropout=dropout,
-        #     bias=attention_bias,
-        #     cross_attention_dim=cross_attention_dim if only_cross_attention else None,
-        #     upcast_attention=upcast_attention,
-        # )
         self.attn1 = FusedMatrixAttention(
             row_dim=row_dim,
             col_dim=col_dim,
             qk_col_dim=qk_col_dim,
             v_col_dim=v_col_dim,
+            attention_bias=attention_bias,
             num_col_heads=num_col_heads,
             num_row_heads=num_row_heads,
+            upcast_attention=upcast_attention,
             **attn_kwargs,
         )
+        
+        # self.attn1 = Attention(
+        #     query_dim=row_dim,
+        #     heads=num_row_heads,
+        #     dim_head=row_dim//num_row_heads,
+        #     dropout=dropout,
+        #     bias=attention_bias,
+        #     cross_attention_dim=cross_attention_dim if only_cross_attention else None,
+        #     upcast_attention=upcast_attention,
+        # )
 
         # # 2. Cross-Attn
         # if cross_attention_dim is not None or double_self_attention:
@@ -695,6 +733,7 @@ class BasicTransformerBlock_(nn.Module):
         timestep: Optional[torch.LongTensor] = None,
         cross_attention_kwargs: Dict[str, Any] = None,
         class_labels: Optional[torch.LongTensor] = None,
+        disable_matrix_attention: Optional[bool] = False,
     ) -> torch.FloatTensor:
         # hidden_states: (B*N, T, D)
         # Notice that normalization is always applied before the real computation in the following blocks.
@@ -734,9 +773,15 @@ class BasicTransformerBlock_(nn.Module):
             #encoder_hidden_states=encoder_hidden_states if self.only_cross_attention else None,
             # attention_mask=attention_mask,
             # **cross_attention_kwargs,
+            disable_matrix_attention=disable_matrix_attention
         )
         attn_output = rearrange(attn_output, 'B T N D -> (B N) T D')
-
+        # attn_output = self.attn1(
+        #     norm_hidden_states,
+        #     encoder_hidden_states=encoder_hidden_states if self.only_cross_attention else None,
+        #     attention_mask=attention_mask,
+        #     **cross_attention_kwargs,
+        # )
         if self.use_ada_layer_norm_zero:
             attn_output = gate_msa.unsqueeze(1) * attn_output
         elif self.use_ada_layer_norm_single:
@@ -863,7 +908,6 @@ class Transformer3DModelOutput(BaseOutput):
 
 class FrameDiTHT2V(ModelMixin, ConfigMixin):
     _supports_gradient_checkpointing = True
-    channel_first: bool = True
 
     """
     A 2D Transformer model for image-like data.
@@ -908,6 +952,8 @@ class FrameDiTHT2V(ModelMixin, ConfigMixin):
         norm_num_groups: int = 32,
         cross_attention_dim: Optional[int] = None,
         attention_bias: bool = False,
+        use_bias: bool = True,
+        bias_type: str = 'matrix',
         fuse_mode: str = 'concat',
         u_type: str = 'param',
         attention_mode: str = 'math',
@@ -926,6 +972,8 @@ class FrameDiTHT2V(ModelMixin, ConfigMixin):
         attention_type: str = "default",
         caption_channels: int = None,
         video_length: int = 16,
+        disable_matrix_attention: bool = False,
+        uniform_gate: bool = False,
     ):
         super().__init__()
         self.use_linear_projection = use_linear_projection
@@ -941,6 +989,8 @@ class FrameDiTHT2V(ModelMixin, ConfigMixin):
         v_col_inner_dim = num_col_attn_heads * v_col_attn_head_dim
         row_inner_dim = num_row_attn_heads * row_attn_head_dim
         self.video_length = video_length
+
+        self.disable_matrix_attention = disable_matrix_attention
 
         conv_cls = nn.Conv2d if USE_PEFT_BACKEND else LoRACompatibleConv
         linear_cls = nn.Linear if USE_PEFT_BACKEND else LoRACompatibleLinear
@@ -1044,23 +1094,6 @@ class FrameDiTHT2V(ModelMixin, ConfigMixin):
         # Define temporal transformers blocks
         self.temporal_transformer_blocks = nn.ModuleList(
             [
-                # BasicTransformerBlock_( # one attention
-                #     inner_dim,
-                #     num_row_attn_heads, # num_attention_heads
-                #     row_attn_head_dim, # attention_head_dim 72
-                #     dropout=dropout,
-                #     cross_attention_dim=None,
-                #     activation_fn=activation_fn,
-                #     num_embeds_ada_norm=num_embeds_ada_norm,
-                #     attention_bias=attention_bias,
-                #     only_cross_attention=only_cross_attention,
-                #     double_self_attention=False,
-                #     upcast_attention=upcast_attention,
-                #     norm_type=norm_type,
-                #     norm_elementwise_affine=norm_elementwise_affine,
-                #     norm_eps=norm_eps,
-                #     attention_type=attention_type,
-                # )
                 BasicTransformerBlock_(
                     col_dim=self.col_dim,
                     row_dim=row_inner_dim,
@@ -1081,7 +1114,9 @@ class FrameDiTHT2V(ModelMixin, ConfigMixin):
                     attention_type=attention_type,
                     fuse_mode=fuse_mode,
                     u_type=u_type,
-                    attention_mode=attention_mode
+                    use_bias=use_bias,
+                    attention_mode=attention_mode,
+                    bias_type=bias_type
                 )
                 for d in range(num_layers)
             ]
@@ -1130,8 +1165,11 @@ class FrameDiTHT2V(ModelMixin, ConfigMixin):
         self.initialize_weights()
 
     def initialize_weights(self):
-        # Initialize transformer layers:
-        def _basic_init(module):
+        # Initialize transformer layers, exclude ContentGate layers
+        def _basic_init(module):           
+            if isinstance(module, (LoRACompatibleLinear, LoRACompatibleConv)):
+                return
+
             if isinstance(module, nn.Linear):
                 torch.nn.init.xavier_uniform_(module.weight)
                 if module.bias is not None:
@@ -1142,12 +1180,39 @@ class FrameDiTHT2V(ModelMixin, ConfigMixin):
                 torch.nn.init.xavier_uniform_(module.w)
                 if module.bias is not None:
                     nn.init.constant_(module.bias, 0)
+                if hasattr(module, 'bias_col') and module.bias_col is not None:
+                    nn.init.kaiming_uniform_(module.bias_col, a=math.sqrt(5))
+                    nn.init.constant_(module.bias_row, 0)
 
         self.apply(_basic_init)
 
+        for block in self.temporal_transformer_blocks:
+            if hasattr(block.attn1, 'content_gate'):
+                block.attn1.content_gate.reset_parameters()
+
+    def reset_content_gate(self, type='constant'):
+        # Reset content gate parameters in temporal attention layers
+        for block in self.temporal_transformer_blocks:
+            if hasattr(block.attn1, 'content_gate'):
+                if type == 'constant':
+                    block.attn1.content_gate.reset_parameters()
+                elif type == 'uniform':
+                    block.attn1.content_gate.reset_parameters_to_uniform()
+                else:
+                    raise NotImplementedError
 
     def _set_gradient_checkpointing(self, module, value=False):
         self.gradient_checkpointing = value
+
+    def enable_gradient_checkpointing(self, n_first_temporal_block=999) -> None:
+        """
+        Activates gradient checkpointing for the current model (may be referred to as *activation checkpointing* or
+        *checkpoint activations* in other frameworks).
+        """
+        if not self._supports_gradient_checkpointing:
+            raise ValueError(f"{self.__class__.__name__} does not support gradient checkpointing.")
+        from functools import partial
+        self.apply(partial(self._set_gradient_checkpointing, value=n_first_temporal_block))
 
 
     def forward(
@@ -1279,7 +1344,8 @@ class FrameDiTHT2V(ModelMixin, ConfigMixin):
 
         for i, (spatial_block, temp_block) in enumerate(zip(self.transformer_blocks, self.temporal_transformer_blocks)):
 
-            if self.training and self.gradient_checkpointing:
+            if self.training and self.gradient_checkpointing and i <= self.gradient_checkpointing:
+                # print(f"Using gradient checkpointing for block {i}")
                 hidden_states = torch.utils.checkpoint.checkpoint(
                     spatial_block,
                     hidden_states,
@@ -1291,6 +1357,15 @@ class FrameDiTHT2V(ModelMixin, ConfigMixin):
                     class_labels,
                     use_reentrant=False,
                 )
+            # hidden_states = spatial_block(
+            #     hidden_states,
+            #     attention_mask,
+            #     encoder_hidden_states_spatial,
+            #     encoder_attention_mask,
+            #     timestep_spatial,
+            #     cross_attention_kwargs,
+            #     class_labels,
+            # )
 
                 if enable_temporal_attentions:
                     hidden_states = rearrange(hidden_states, '(b f) t d -> (b t) f d', b=input_batch_size).contiguous()
@@ -1312,6 +1387,7 @@ class FrameDiTHT2V(ModelMixin, ConfigMixin):
                             cross_attention_kwargs,
                             class_labels,
                             use_reentrant=False,
+                            disable_matrix_attention=self.disable_matrix_attention
                         )
 
                         hidden_states = torch.cat([hidden_states_video, hidden_states_image], dim=1)
@@ -1331,6 +1407,7 @@ class FrameDiTHT2V(ModelMixin, ConfigMixin):
                             cross_attention_kwargs,
                             class_labels,
                             use_reentrant=False,
+                            disable_matrix_attention=self.disable_matrix_attention
                         )
 
                         hidden_states = rearrange(hidden_states, '(b t) f d -> (b f) t d', b=input_batch_size).contiguous()
@@ -1346,7 +1423,6 @@ class FrameDiTHT2V(ModelMixin, ConfigMixin):
                 )
 
                 if enable_temporal_attentions:
-
                     hidden_states = rearrange(hidden_states, '(b f) t d -> (b t) f d', b=input_batch_size).contiguous()
 
                     if use_image_num != 0 and self.training:
@@ -1361,11 +1437,11 @@ class FrameDiTHT2V(ModelMixin, ConfigMixin):
                             timestep_temp,
                             cross_attention_kwargs,
                             class_labels,
+                            disable_matrix_attention=self.disable_matrix_attention
                         )
 
                         hidden_states = torch.cat([hidden_states_video, hidden_states_image], dim=1)
                         hidden_states = rearrange(hidden_states, '(b t) f d -> (b f) t d', b=input_batch_size).contiguous()
-
                     else:
                         if i == 0 and frame > 1:
                             hidden_states = hidden_states + self.temp_pos_embed
@@ -1378,10 +1454,10 @@ class FrameDiTHT2V(ModelMixin, ConfigMixin):
                             timestep_temp,
                             cross_attention_kwargs,
                             class_labels,
+                            disable_matrix_attention=self.disable_matrix_attention
                         )
 
                         hidden_states = rearrange(hidden_states, '(b t) f d -> (b f) t d', b=input_batch_size).contiguous()
-
 
         if self.is_input_patches:
             if self.config.norm_type != "ada_norm_single":
@@ -1422,12 +1498,83 @@ class FrameDiTHT2V(ModelMixin, ConfigMixin):
 
 
 # resolution 512x512, patch size 2, vae scaling factor 8 => tokens_per_frame = (512/8/2)^2 = 1024
+def FrameDiTHT2V_XL_2_Latte_like(**kwargs):
+    return FrameDiTHT2V(
+        col_dim=1024, num_row_attn_heads=16, row_attn_head_dim=72, attention_bias=True, caption_channels=4096, cross_attention_dim=1152, norm_elementwise_affine=False, norm_eps=1e-6, 
+        num_layers=28, patch_size=2, sample_size=64, num_embeds_ada_norm=1000, attention_type="default", norm_type="ada_norm_single", activation_fn='gelu-approximate', **kwargs
+    )
+
+
+
+
 def FrameDiTHT2V_XL_2(**kwargs):
-    return FrameDiTHT2V(col_dim=1024, num_col_attn_heads=16, num_row_attn_heads=16, qk_col_attn_head_dim=32, v_col_attn_head_dim=64, row_attn_head_dim=72, attention_bias=True, caption_channels=4096, 
-                        cross_attention_dim=1152, norm_elementwise_affine=False, norm_eps=1e-6, num_layers=28, patch_size=2, sample_size=64, num_embeds_ada_norm=1000, attention_type="default", norm_type="ada_norm_single", activation_fn='gelu-approximate', fuse_mode='concat', u_type='softmax', attention_mode='flash', **kwargs)
+    return FrameDiTHT2V_XL_2_Latte_like(num_col_attn_heads=16, qk_col_attn_head_dim=32, v_col_attn_head_dim=64, fuse_mode='concat', u_type='softmax', attention_mode='math', **kwargs)
+
+def FrameDiTHT2V_XL_2_16_32_64_sum(**kwargs):
+    return FrameDiTHT2V_XL_2_Latte_like(num_col_attn_heads=16, qk_col_attn_head_dim=32, v_col_attn_head_dim=64, fuse_mode='sum', u_type='softmax', attention_mode='math', **kwargs)
+
+def FrameDiTHT2V_XL_2_32_32_64_gated_no_scale(**kwargs):
+    return FrameDiTHT2V_XL_2_Latte_like(num_col_attn_heads=16, qk_col_attn_head_dim=32, v_col_attn_head_dim=64, fuse_mode='gated_no_scale', u_type='softmax', attention_mode='math', **kwargs)
+
+def FrameDiTHT2V_XL_2_16_32_32(**kwargs):
+    return FrameDiTHT2V_XL_2_Latte_like(num_col_attn_heads=16, qk_col_attn_head_dim=32, v_col_attn_head_dim=32, fuse_mode='concat', u_type='softmax', attention_mode='math', **kwargs)
+
+def FrameDiTHT2V_XL_2_16_32_32_sum(**kwargs):
+    return FrameDiTHT2V_XL_2_Latte_like(num_col_attn_heads=16, qk_col_attn_head_dim=32, v_col_attn_head_dim=32, fuse_mode='sum', u_type='softmax', attention_mode='math', **kwargs)
+
+def FrameDiTHT2V_XL_2_32_32_32_gated_no_scale(**kwargs):
+    return FrameDiTHT2V_XL_2_Latte_like(num_col_attn_heads=16, qk_col_attn_head_dim=32, v_col_attn_head_dim=32, fuse_mode='gated_no_scale', u_type='softmax', attention_mode='math', **kwargs)
+
+def FrameDiTHT2V_XL_2_32_32_32_local(**kwargs):
+    return FrameDiTHT2V_XL_2_Latte_like(num_col_attn_heads=16, qk_col_attn_head_dim=32, v_col_attn_head_dim=32, fuse_mode='local', u_type='softmax', attention_mode='math', **kwargs)
+
+def FrameDiTHT2V_XL_2_32_32_32_content_based_gated(**kwargs):
+    return FrameDiTHT2V_XL_2_Latte_like(num_col_attn_heads=16, qk_col_attn_head_dim=32, v_col_attn_head_dim=32, fuse_mode='content_based_gated', u_type='softmax', attention_mode='math', **kwargs)
+
+def FrameDiTHT2V_XL_2_32_32_32_difference_content_based_gated(**kwargs):
+    return FrameDiTHT2V_XL_2_Latte_like(num_col_attn_heads=16, qk_col_attn_head_dim=32, v_col_attn_head_dim=32, fuse_mode='difference_content_based_gated', u_type='softmax', attention_mode='math', **kwargs)
+
+def FrameDiTHT2V_XL_2_4_16_difference_content_based_gated(**kwargs):
+    return FrameDiTHT2V_XL_2_Latte_like(num_col_attn_heads=16, qk_col_attn_head_dim=4, v_col_attn_head_dim=16, fuse_mode='difference_content_based_gated', u_type='softmax', attention_mode='math', **kwargs)
+
+def FrameDiTHT2V_XL_2_1_1_difference_content_based_gated(**kwargs):
+    return FrameDiTHT2V_XL_2_Latte_like(num_col_attn_heads=256, qk_col_attn_head_dim=1, v_col_attn_head_dim=1, fuse_mode='difference_content_based_gated', u_type='pure-softmax', attention_mode='math', use_bias=True, bias_type='col_row', **kwargs)
+
+def FrameDiTHT2V_XL_2_1_1_global(**kwargs):
+    return FrameDiTHT2V_XL_2_Latte_like(num_col_attn_heads=256, qk_col_attn_head_dim=1, v_col_attn_head_dim=1, fuse_mode='global', u_type='pure-softmax', attention_mode='math', use_bias=True, bias_type='col_row', **kwargs)
+
+def FrameDiTHT2V_XL_2_1_2_global(**kwargs):
+    return FrameDiTHT2V_XL_2_Latte_like(num_col_attn_heads=512, qk_col_attn_head_dim=1, v_col_attn_head_dim=2, fuse_mode='global', u_type='pure-softmax', attention_mode='math', use_bias=True, bias_type='col_row', **kwargs)
+
+def FrameDiTHT2V_XL_2_1_2_concat(**kwargs):
+    return FrameDiTHT2V_XL_2_Latte_like(num_col_attn_heads=512, qk_col_attn_head_dim=1, v_col_attn_head_dim=2, fuse_mode='concat', u_type='pure-softmax', attention_mode='math', use_bias=True, bias_type='col_row', **kwargs)
+
+def FrameDiTHT2V_XL_2_1_2_concat_separate_col_row(**kwargs):
+    return FrameDiTHT2V_XL_2_Latte_like(num_col_attn_heads=512, qk_col_attn_head_dim=1, v_col_attn_head_dim=2, fuse_mode='concat', u_type='pure-softmax', attention_mode='math', use_bias=True, bias_type='separate_col_row', **kwargs)
+
+
+
+# def FrameDiTHT2V_XL_2(**kwargs):
+#     return FrameDiTHT2V(col_dim=1024, num_col_attn_heads=16, num_row_attn_heads=16, qk_col_attn_head_dim=32, v_col_attn_head_dim=64, row_attn_head_dim=72, attention_bias=True, caption_channels=4096, 
+#                         cross_attention_dim=1152, norm_elementwise_affine=False, norm_eps=1e-6, num_layers=28, patch_size=2, sample_size=64, num_embeds_ada_norm=1000, attention_type="default", norm_type="ada_norm_single", activation_fn='gelu-approximate', fuse_mode='concat', u_type='softmax', attention_mode='math', **kwargs)
+
 
 FrameDiTHT2V_models = {
     'FrameDiTHT2V-XL/256-2': FrameDiTHT2V_XL_2,
+    'FrameDiTHT2V-XL/256-2-sum': FrameDiTHT2V_XL_2_16_32_64_sum,
+    'FrameDiTHT2V-XL/256-2-gated_no_scale': FrameDiTHT2V_XL_2_32_32_64_gated_no_scale,
+    'FrameDiTHT2V-XL/256-2-32': FrameDiTHT2V_XL_2_16_32_32,
+    'FrameDiTHT2V-XL/256-2-32-sum': FrameDiTHT2V_XL_2_16_32_32_sum,
+    'FrameDiTHT2V-XL/256-2-32-gated_no_scale': FrameDiTHT2V_XL_2_32_32_32_gated_no_scale,
+    'FrameDiTHT2V-XL/256-2-32-local': FrameDiTHT2V_XL_2_32_32_32_local,
+    'FrameDiTHT2V-XL/256-2-32-content_based_gated': FrameDiTHT2V_XL_2_32_32_32_content_based_gated,
+    'FrameDiTHT2V-XL/256-2-32-difference_content_based_gated': FrameDiTHT2V_XL_2_32_32_32_difference_content_based_gated,
+    'FrameDiTHT2V-XL/256-2-4-16-difference_content_based_gated': FrameDiTHT2V_XL_2_4_16_difference_content_based_gated,
+    'FrameDiTHT2V-XL/256-2-1-1-difference_content_based_gated': FrameDiTHT2V_XL_2_1_1_difference_content_based_gated,
+    'FrameDiTHT2V-XL/256-2-1-1-global': FrameDiTHT2V_XL_2_1_1_global,
+    'FrameDiTHT2V-XL/256-2-1-2-global': FrameDiTHT2V_XL_2_1_2_global,
+    'FrameDiTHT2V-XL/256-2-1-2-concat': FrameDiTHT2V_XL_2_1_2_concat,
+    'FrameDiTHT2V-XL/256-2-1-2-concat-separate-col-row': FrameDiTHT2V_XL_2_1_2_concat_separate_col_row,
 }
 
 """

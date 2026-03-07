@@ -1,9 +1,10 @@
 # dataset
 dataset: "taichi"
 
-data_path: "/scratch/s224075134/temporal_diffusion/datasets/video/taichi/train"
-latent_path: null
-load_latent: False
+data_path: null
+latent_path: "/scratch/s224075134/temporal_diffusion/datasets/video/taichi_latent_16_kl_f8_autoencoder_bilinear_flip/train"
+load_latent: True
+
 
 vae: "./configs/vae/autoencoder_kl.yaml"
 
@@ -12,7 +13,7 @@ results_dir: "./results"
 pretrained:
 # model config: 
 model: DiT3D-M/2
-num_frames: 48
+num_frames: 64
 image_size: 128 # choices=[256, 512]
 in_channels: 4
 num_sampling_steps: 250
@@ -28,14 +29,14 @@ learning_rate: 1e-4
 ckpt_every: 10000
 clip_max_norm: 0.1
 start_clip_iter: 500000
-local_batch_size: 5 # important
+local_batch_size: 4 # important
 max_train_steps: 1000000
-global_seed: 3407
+global_seed: 3408
 num_workers: 8
 log_every: 50
 lr_warmup_steps: 0
 resume_from_checkpoint:
-gradient_accumulation_steps: 3 # TODO
+gradient_accumulation_steps: 4 # TODO
 num_classes:
 
 # low VRAM and speed up training TODO
@@ -46,4 +47,4 @@ enable_xformers_memory_efficient_attention: False
 gradient_checkpointing: False
 
 # Wandb logger
-project: 
+project: vdm

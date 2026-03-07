@@ -17,56 +17,50 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.ticker import ScalarFormatter, AutoMinorLocator
 from pathlib import Path
+import seaborn as sns
 
 def set_pub_style():
+    palette = {
+        "Local Factorized": "#F78F27",
+        "Full 3D": "#FD88FD",
+        "FrameDiT-G": "#567BFF",
+        "FrameDiT-H": "#43C26F",
+    }
+    sns.set_theme(context="paper", style="whitegrid")
+    sns.set_palette(list(palette.values()))
     plt.rcParams.update({
-        "figure.figsize": (5.0, 3.3),      # single-column CVPR-ish
-        "figure.dpi": 300,
-        "savefig.dpi": 300,
-        "savefig.bbox": "tight",
-        "font.size": 12,
-        "axes.titlesize": 13,
-        "axes.labelsize": 12,
-        "legend.fontsize": 10,
-        "xtick.labelsize": 11,
-        "ytick.labelsize": 11,
-        "lines.linewidth": 2.0,
-        "lines.markersize": 5.5,
-        "axes.grid": True,
-        "grid.alpha": 0.25,
-        "grid.linestyle": "-",
-        "axes.spines.top": False,
-        "axes.spines.right": False,
-        "figure.autolayout": False,        # we’ll call tight_layout() explicitly
+        "figure.figsize": (8.6, 2.8),
+    "figure.dpi": 400,
+        "savefig.dpi": 400,
+        "font.family": "sans-serif",
+        "font.sans-serif": ["Calibri", "Arial", "DejaVu Sans"],
+        "font.size": 11,
+        "axes.linewidth": 0.7,
+        "axes.spines.top": True,
+        "axes.spines.right": True,
+        "grid.alpha": 0.3,
+        #"grid.linestyle": "--",
     })
+    return palette
 
 
-def beautify_ax(ax, x_label, y_label, title=None, logy=False):
+def beautify_ax(ax, x_label, y_label, logy=False):
     ax.set_xlabel(x_label)
+    # xlabel fontsize
+    ax.xaxis.label.set_size(9)
     ax.set_ylabel(y_label)
-    if title:
-        ax.set_title(title)
-    # scientific formatter but readable
-    ax.yaxis.set_major_formatter(ScalarFormatter(useMathText=True))
-    ax.ticklabel_format(axis='y', style='sci', scilimits=(3, 3))
-    # minor ticks
-    ax.xaxis.set_minor_locator(AutoMinorLocator())
-    ax.yaxis.set_minor_locator(AutoMinorLocator())
-    # optional log scale for wide ranges
+    ax.tick_params(axis="both", which="major", length=3.2, width=0.8, pad=1.5)
+    for s in ax.spines.values():
+        s.set_color("black")
+        s.set_linewidth(0.5)
     if logy:
         ax.set_yscale("log")
-        # reset formatter for log scale to plain numbers
-        ax.yaxis.set_major_formatter(ScalarFormatter())
-        ax.ticklabel_format(axis='y', style='plain')
-    # consistent grid
-    ax.grid(True, which='both', axis='both', alpha=0.25)
-
 
 def plot_metric_lines(df, y_col, out_basepath: Path, title: str, y_label: str, logy=False):
     fig, ax = plt.subplots(figsize=(3.6, 2.8), dpi=400)  # smaller figure
     for m in df['model'].unique():
-        sdf = df[df['model'] == m].sort_values('token_size')
-        ax.plot(sdf['token_size'], sdf[y_col], marker='o', label=m, linewidth=1.8)
+        sdf = df[df['model'] == m].sort_values('num_frames')
+        ax.plot(sdf['num_frames'], sdf[y_col], marker='o', label=m, linewidth=1.8)
 
     beautify_ax(ax, x_label='Number of tokens per frame', y_label=y_label, title=title, logy=logy)
 
@@ -96,14 +90,17 @@ def plot_combined_three(df: pd.DataFrame, save_path: Path):
     Create one figure with 3 aligned subplots:
     (a) FLOPs, (b) Latency, (c) Memory vs #Frames
     """
-    set_pub_style()
+    custom_palette = set_pub_style()
     metrics = [
-        ("flops_GF", "FLOPs", "(a)"),
-        ("latency_avg_ms", "Latency (ms)", "(b)"),
-        ("peak_mem_MB", "Peak Memory (MB)", "(c)")
+        ("FVD", "FVD↓", "(a)"),
+        ("flops_GF", "FLOPs", "(b)"),
+        ("latency_avg_ms", "Latency (s)", "(c)"),
+        ("peak_mem_MB", "Peak Memory (GB)", "(d)")
     ]
+    df['latency_avg_ms'] = df['latency_avg_ms']/1000
+    df['peak_mem_MB'] = df['peak_mem_MB']/1024
 
-    fig, axes = plt.subplots(1, 3, figsize=(9.0, 2.8), dpi=400, sharex=True)
+    fig, axes = plt.subplots(1, 4, figsize=(10.2, 2.4), dpi=400, sharex=True)
     colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
 
     for i, (y_col, y_label, sublabel) in enumerate(metrics):
@@ -114,26 +111,53 @@ def plot_combined_three(df: pd.DataFrame, save_path: Path):
             continue
 
         for j, m in enumerate(df['model'].unique()):
-            sdf = df[df['model'] == m].sort_values('token_size')
-            ax.plot(sdf['token_size'], sdf[y_col],
-                    marker='o', linewidth=1.8,
+            sdf = df[df['model'] == m].sort_values('num_frames')
+            ax.plot(sdf['num_frames'], sdf[y_col],
+                    marker=None, linewidth=2,
                     label=m if i == 1 else None,  # show legend only once (middle)
-                    color=colors[j % len(colors)])
-        beautify_ax(ax, x_label='Number of tokens per frame' if i == 1 else '',
-                    y_label=y_label, title='', logy=False)
-        ax.text(0.02, 0.95, sublabel, transform=ax.transAxes,
-                fontsize=11, fontweight='bold', va='top', ha='left')
+                    color=custom_palette[m]
+        )
+        # beautify_ax(ax, x_label='Number of tokens per frame' if i == 1 else '',
+        #             y_label=y_label, title='', logy=False)
+        beautify_ax(ax, "Video length", y_label, logy=False)
+        # ax.text(0.02, 0.95, sublabel, transform=ax.transAxes, fontsize=11, fontweight='bold', va='top', ha='left')
         if i != 0:
             ax.yaxis.label.set_visible(True)
         if i > 0:
             ax.yaxis.set_tick_params(labelleft=True)
-        if i == 1:
-            ax.legend(loc='upper left', fontsize=9, frameon=True,
-                      framealpha=0.9, handlelength=2.4, handletextpad=0.4)
+        #ax.set_xticks(frames)
+        ax.margins(x=0)
+        #ax.set_xlim(frames[0], frames[-1])
+        # if i == 1:
+        #     ax.legend(loc='upper left', fontsize=9, frameon=True,
+        #               framealpha=0.9, handlelength=2.4, handletextpad=0.4)
+        ax.set_xticks([16, 32, 64, 128])
 
     # global formatting
     # fig.suptitle("Efficiency of Transformer Variants with Factorized, Matrix, and Full Attention", fontsize=13)
-    fig.tight_layout(pad=0.6, w_pad=1.6)
+    #fig.tight_layout(pad=0.6, w_pad=1.6)
+    handles, labels = axes[1].get_legend_handles_labels()
+    legend = fig.legend(
+        handles, labels,
+        loc='upper center',
+        bbox_to_anchor=(0.5, 0.05),
+        ncol=5,
+        frameon=True,
+        framealpha=1.0,
+        facecolor='white',
+        edgecolor='#D6D6D6',
+        fontsize=10,
+        columnspacing=1.2,
+        handlelength=1.5,
+        handletextpad=0.5,
+        borderpad=0.3
+    )
+    legend.get_frame().set_linewidth(0.4)
+    # legend.get_frame().set_linewidth(0.5)
+
+    fig.tight_layout(pad=0.5, w_pad=0.5)
+    plt.subplots_adjust(bottom=0.22)
+
     png_path = save_path.with_suffix(".png")
     pdf_path = save_path.with_suffix(".pdf")
     fig.savefig(png_path, bbox_inches='tight', pad_inches=0.03)
@@ -389,7 +413,7 @@ if __name__ == "__main__":
     #             "peak_mem_MB": (bench["peak_mem_bytes"] / (1024**2)) if bench["peak_mem_bytes"] is not None else None,
     #         })
 
-    csv_path = './speed_vs_tokens.csv'
+    csv_path = './speed_fvd_vs_frames.csv'
     # df = pd.DataFrame(results)
     # print(df)
     # df = df.sort_values(["model", "token_size"])
@@ -399,47 +423,47 @@ if __name__ == "__main__":
 
     # change model name for better legend
     df['model'] = df['model'].replace({
-        'Latte-M/2': 'Factorized',
-        'MatLatte-M/64-256/2': 'Matrix',
-        'DiT3D-M/2': 'Full',
-        'FusedMatLatte-M/64-256/2-concat': 'Hybrid',
+        'Latte-M/2': 'Local Factorized',
+        'MatLatte-M/64-256/2': 'FrameDiT-G',
+        'DiT3D-M/2': 'Full 3D',
+        'FusedMatLatte-M/64-256/2-concat': 'FrameDiT-H',
     })
 
     df_flops = df.dropna(subset=["flops_GF"])
-    if not df_flops.empty:
-        plot_metric_lines(
-            df_flops, "flops_GF",
-            save_dir / "flops_vs_tokens",
-            title="FLOPs vs Number of Tokens (forward)",
-            y_label="FLOPs (GFLOPs)",
-            logy=False
-        )
-        print(f"Saved plot: {save_dir / 'flops_vs_tokens.png'}")
-    else:
-        print("FLOPs unavailable for all entries; skipping FLOPs plot.")
+    # if not df_flops.empty:
+    #     plot_metric_lines(
+    #         df_flops, "flops_GF",
+    #         save_dir / "flops_vs_tokens",
+    #         title="FLOPs vs Number of Tokens (forward)",
+    #         y_label="FLOPs (GFLOPs)",
+    #         logy=False
+    #     )
+    #     print(f"Saved plot: {save_dir / 'flops_vs_tokens.png'}")
+    # else:
+    #     print("FLOPs unavailable for all entries; skipping FLOPs plot.")
 
-    # 2) Latency (avg) vs tokens
-    plot_metric_lines(
-        df, "latency_avg_ms",
-        save_dir / "latency_vs_tokens",
-        title="Average Forward Latency vs Number of Tokens",
-        y_label="Latency (ms)",
-        logy=False
-    )
-    print(f"Saved plot: {save_dir / 'latency_vs_tokens.png'}")
+    # # 2) Latency (avg) vs tokens
+    # plot_metric_lines(
+    #     df, "latency_avg_ms",
+    #     save_dir / "latency_vs_tokens",
+    #     title="Average Forward Latency vs Number of Tokens",
+    #     y_label="Latency (ms)",
+    #     logy=False
+    # )
+    # print(f"Saved plot: {save_dir / 'latency_vs_tokens.png'}")
 
-    # 3) Peak memory vs tokens
-    df_mem = df.dropna(subset=["peak_mem_MB"])
-    if not df_mem.empty:
-        plot_metric_lines(
-            df_mem, "peak_mem_MB",
-            save_dir / "memory_vs_tokens",
-            title="Peak GPU Memory vs Number of Tokens",
-            y_label="Peak Memory (MB)",
-            logy=False
-        )
-        print(f"Saved plot: {save_dir / 'memory_vs_tokens.png'}")
-    else:
-        print("Peak memory unavailable; skipping memory plot.")
+    # # 3) Peak memory vs tokens
+    # df_mem = df.dropna(subset=["peak_mem_MB"])
+    # if not df_mem.empty:
+    #     plot_metric_lines(
+    #         df_mem, "peak_mem_MB",
+    #         save_dir / "memory_vs_tokens",
+    #         title="Peak GPU Memory vs Number of Tokens",
+    #         y_label="Peak Memory (MB)",
+    #         logy=False
+    #     )
+    #     print(f"Saved plot: {save_dir / 'memory_vs_tokens.png'}")
+    # else:
+    #     print("Peak memory unavailable; skipping memory plot.")
 
-    plot_combined_three(df, save_dir / "combined_metrics_vs_tokens")
+    plot_combined_three(df, save_dir / "combined_metrics_vs_frames")

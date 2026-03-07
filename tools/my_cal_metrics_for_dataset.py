@@ -17,9 +17,9 @@ def check_if_video_folder(path: str) -> bool:
     if not os.path.isdir(path):
         return False
     for fname in os.listdir(path):
-        if not any(fname.lower().endswith(ext) for ext in video_extensions):
-            return False
-    return True
+        if any(fname.lower().endswith(ext) for ext in video_extensions):
+            return True
+    return False
 
 
 def assert_video(video: torch.Tensor):
@@ -79,9 +79,9 @@ def cal_metrics(
         resolution=resolution,
         use_labels=False,
     )
-    class_name = 'tools.utils.dataset.VideoDataset' if check_if_video_folder(fake_data_path) else 'tools.utils.dataset.VideoFramesFolderDataset'
+    fake_class_name = 'tools.utils.dataset.VideoDataset' if check_if_video_folder(fake_data_path) else 'tools.utils.dataset.VideoFramesFolderDataset'
     args.gen_dataset_kwargs = dnnlib.EasyDict(
-        class_name=class_name,
+        class_name=fake_class_name,
         path=fake_data_path,
         cfg=dataset_cfg,
         load_n_consecutive=num_frames,
@@ -109,17 +109,11 @@ def cal_metrics(
     num_real = len(real_dataset)
     if num_real < num_items:
         num_items = num_real
-<<<<<<< HEAD
-=======
-    
-    #num_items = 2048
->>>>>>> 55f319d (code1)
     # item_subset = random.sample(range(data_length), num_items) # added by xin, randomly selected 2048 videos
 
     print('num_items:', num_items)
     print('len(real_dataset):', len(real_dataset))
     real_loader = torch.utils.data.DataLoader(
-<<<<<<< HEAD
         dataset=real_dataset,
         sampler=random.sample(range(len(real_dataset)), num_items),
         batch_size=NUM_FRAMES_IN_BATCH[resolution],
@@ -130,28 +124,14 @@ def cal_metrics(
         # sampler=random.sample(range(len(fake_dataset)), num_items),
         batch_size=NUM_FRAMES_IN_BATCH[resolution],
         num_workers=4
-=======
-        dataset=fake_dataset,
-        #sampler=random.sample(range(len(real_dataset)), num_items),
-        batch_size=NUM_FRAMES_IN_BATCH[resolution],
-        num_workers=4,
-        shuffle=False
-    )
-    fake_loader = torch.utils.data.DataLoader(
-        dataset=fake_dataset,
-        #sampler=random.sample(range(len(fake_dataset)), num_items),
-        batch_size=NUM_FRAMES_IN_BATCH[resolution],
-        num_workers=4,
-        shuffle=False
-
->>>>>>> 55f319d (code1)
     )
     print('len(fake_loader):', len(fake_loader))
     print('len(real_loader):', len(real_loader))
 
-    # TODO: should handle the case when n_real < n_fake
+    if len(real_loader) < len(fake_loader):
+        real_loader = infinite_loader(real_loader)
 
-    for real_batch, fake_batch in tqdm(zip_longest(real_loader, fake_loader, fillvalue=None)):
+    for real_batch, fake_batch in tqdm(zip(real_loader, fake_loader)):
         #assert_video(real_batch['image'])
         assert_video(fake_batch['image'])
 
@@ -174,13 +154,14 @@ def cal_metrics(
             json.dump(finals, f, indent=4)
         print(f'Saved results to {result_file}')
 
+def infinite_loader(loader):
+    while True:
+        for batch in loader:
+            yield batch
+
 
 def get_num_frames(video_dir: str) -> int:
     # get abitrary video file in the folder
-<<<<<<< HEAD
-=======
-    return 16
->>>>>>> 55f319d (code1)
     import os
     video_files = [f for f in os.listdir(video_dir) if f.endswith(('.mp4', '.avi', '.mov', '.mkv'))]
     if len(video_files) == 0:

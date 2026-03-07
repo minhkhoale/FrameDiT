@@ -88,11 +88,7 @@ class VideoMetric(nn.Module):
                 case VideoMetricType.SSIM:
                     module = StructuralSimilarityIndexMeasure(data_range=1.0, **(torchmetrics_kwargs or {}))
                 case VideoMetricType.PSNR:
-<<<<<<< HEAD
                     module = PeakSignalNoiseRatio(data_range=1.0, **(torchmetrics_kwargs or {}))
-=======
-                    module = PeakSignalNoiseRatio(data_range=255.0, **(torchmetrics_kwargs or {}))
->>>>>>> 55f319d (code1)
                 case _:
                     raise ValueError(f"Unknown video metric type: {metric_type}")
             registry.register_for_metric(metric_type)
@@ -174,9 +170,9 @@ class VideoMetric(nn.Module):
             preds_split = preds_split[:min_len]
             target_split = target_split[:min_len]
         for preds_chunk, target_chunk in zip(preds_split, target_split):
-            if target_chunk is not None and (preds_chunk.shape != target_chunk.shape):
-                print('Warning: preds_chunk.shape != target_chunk.shape, skipping this chunk')
-                continue
+            # if target_chunk is not None and (preds_chunk.shape != target_chunk.shape):
+            #     print('Warning: preds_chunk.shape != target_chunk.shape, skipping this chunk')
+            #     continue
             self._update(preds_chunk, target_chunk, context_mask)
 
     def _update(
@@ -240,11 +236,7 @@ class VideoMetric(nn.Module):
         for metric_type, module in self._filtered_items(
             self.VIDEO_WISE_METRICS - self.I3D_DEPENDENT_METRICS - self.VBENCH_METRICS
         ):
-<<<<<<< HEAD
             module.update(preds, target)
-=======
-            module.update(preds*255, target*255)
->>>>>>> 55f319d (code1)
 
         # reshape a batch of videos to a batch of image frames
         # preds, target = map(
@@ -266,15 +258,7 @@ class VideoMetric(nn.Module):
                     VideoMetricType.PSNR,
                 }:
                     continue
-<<<<<<< HEAD
             module.update(preds, target)
-=======
-            
-            if metric_type == VideoMetricType.PSNR:
-                module.update(preds*255, torch.clip(target*255+torch.rand_like(target)+torch.rand_like(target)*5, 0, 255.0))
-            else:
-                module.update(preds, target)
->>>>>>> 55f319d (code1)
 
     def log(self, prefix: str):
         dict_metrics = {}

@@ -17,21 +17,17 @@ from .taichi_latent_datasets import TaichiLatent
 from .taichi_image_datasets import TaichiImages
 from .taichi_image_latent_datasets import TaichiImagesLatent
 from .kinetics_600_dataset import Kinetics600
-<<<<<<< HEAD
-
-=======
+from .latent_text_video_dataset import LatentTextVideoDataset
 from .openvid import OpenVidLatentTextDataset
->>>>>>> 55f319d (code1)
 
 def get_dataset(args):
     temporal_sample = video_transforms.TemporalRandomCrop(args.num_frames * args.frame_interval) # 16 1
 
     match args.dataset:
-<<<<<<< HEAD
-=======
         case 'openvid':
             return OpenVidLatentTextDataset(**args)
->>>>>>> 55f319d (code1)
+        case 'latent_text_video' | 'pexels' | 'multiple':
+            return LatentTextVideoDataset(**args)
         case 'ffs':
             if args.load_latent:
                 transform = transforms.Compose([])

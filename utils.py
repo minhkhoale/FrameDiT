@@ -37,6 +37,33 @@ _tensor_or_tensors = Union[torch.Tensor, Iterable[torch.Tensor]]
 #                             Training Clip Gradients                           #
 #################################################################################
 
+TORCH_DTYPES = {
+    'float16': torch.float16,
+    'bfloat16': torch.bfloat16,
+    'float32': torch.float32,
+    'float64': torch.float64,
+    'half': torch.half,
+    'short': torch.short,
+    'int': torch.int,
+    'int8': torch.int8,
+    'int16': torch.int16,
+    'int32': torch.int32,
+    'int64': torch.int64,
+    'long': torch.long,
+    'bool': torch.bool,
+    'uint8': torch.uint8,
+    'complex64': torch.complex64,
+    'complex128': torch.complex128,
+}
+
+def get_torch_dtype(dtype_str):
+    """Converts a string to a torch.dtype object."""
+    dtype = TORCH_DTYPES.get(dtype_str)
+    if dtype is None:
+        raise ValueError(f"Unknown dtype string: {dtype_str}. Supported dtypes are: {list(TORCH_DTYPES.keys())}")
+    return dtype
+
+
 def get_grad_norm(
         parameters: _tensor_or_tensors, norm_type: float = 2.0) -> torch.Tensor:
     r"""
@@ -130,27 +157,6 @@ def clip_grad_norm_(
     return total_norm
 
 def get_experiment_dir(root_dir, args):
-<<<<<<< HEAD
-    if args.pretrained is not None:
-        root_dir += '-ImageNetPretrained'
-    if args.use_compile:
-        root_dir += '-Compile' # speedup by torch compile
-    if args.fixed_spatial:
-        root_dir += '-FixedSpa'
-    if args.enable_xformers_memory_efficient_attention:
-        root_dir += '-Xfor'
-    if args.gradient_checkpointing:
-        root_dir += '-Gc'
-    if args.mixed_precision or args.mixed_precision_16bit:
-        root_dir += '-Amp'
-    if args.image_size == 512:
-        root_dir += '-512'
-    if args.load_latent:
-        root_dir += '-loadlatent'
-    else:
-        root_dir += '-loadpixel'
-    if args.num_frames != 16:
-=======
     if hasattr(args, 'pretrained') and args.pretrained is not None:
         root_dir += '-ImageNetPretrained'
     if hasattr(args, 'use_compile') and args.use_compile:
@@ -170,7 +176,6 @@ def get_experiment_dir(root_dir, args):
     else:
         root_dir += '-loadpixel'
     if hasattr(args, 'num_frames') and args.num_frames != 16:
->>>>>>> 55f319d (code1)
         root_dir += f'-{args.num_frames}frame'
     
     if hasattr(args, 'flip_aug') and args.flip_aug == False:
@@ -273,12 +278,10 @@ def update_ema(ema_model, model, decay=0.9999):
     model_params = OrderedDict(model.named_parameters())
 
     for name, param in model_params.items():
+        if not param.requires_grad:
+            continue
         # TODO: Consider applying only to params that require_grad to avoid small numerical changes of pos_embed
-<<<<<<< HEAD
-        ema_params[name].mul_(decay).add_(param.data, alpha=1 - decay)
-=======
         ema_params[name].mul_(decay).add_(param.data.to(ema_params[name].device), alpha=1 - decay)
->>>>>>> 55f319d (code1)
 
 def requires_grad(model, flag=True):
     """

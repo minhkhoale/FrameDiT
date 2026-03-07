@@ -1,0 +1,56 @@
+pretrained_model_path: maxin-cn/Latte-1
+pretrained: results_t2v/openvid512/005-FrameDiTHT2V-XL-256-2-32-difference_content_based_gated-F16S1-openvid512-lora-r16-alpha16-Compile-Gc-Amp-512-loadlatent/checkpoints/0050000.pt
+use_lora: True
+lora:
+  r: 16
+  lora_alpha: 16
+  lora_dropout: 0.01
+  target_modules:
+    - "to_k"
+    - "to_q"
+    - "to_v"
+    - "to_out.0"
+
+# model config: 
+model:  FrameDiTHT2V-XL/256-2-32-difference_content_based_gated
+# model: LatteT2V
+num_frames: 16
+video_length: 16
+image_size: [512, 512] # choices=[256, 512]
+in_channels: 4
+num_sampling_steps: 50
+frame_interval: 1
+#fixed_spatial: False
+#attention_bias: True
+learn_sigma: True
+#extras: 2 # [1, 2] 1 unconditional generation, 2 class-conditional generation
+attention_mode: math
+resume_from_checkpoint:
+
+# low VRAM and speed up training
+use_compile: True
+mixed_precision_16bit: True
+mixed_precision: False
+enable_xformers_memory_efficient_attention: False
+gradient_checkpointing: True
+
+beta_start: 0.0001
+beta_end: 0.02
+beta_schedule: "linear"
+variance_type: "learned_range"
+seed: 1
+run_time: 0
+guidance_scale: 7.5
+sample_method: 'DDIM'
+save_img_path: "./sample_videos/t2v/framedit-h-difference-content-gate-lora"
+# save_img_path: "./sample_videos/t2v/lattet2v"
+enable_vae_temporal_decoder: False
+enable_temporal_attentions: True # LatteT2V-V0: set to False; LatteT2V-V1: set to True
+text_prompt: [
+              'The video features a man standing on a sandy beach, smiling and looking up towards the sky. The beach is wide and sandy, with a pier visible in the background. The sky is partly cloudy, suggesting a pleasant day. The man is wearing a blue shirt and appears to be enjoying his time at the beach. The overall style of the video is casual and relaxed, capturing a moment of leisure and enjoyment.',
+              'In the video, a man with a beard and a black cap is standing in a garage, next to a red car. He is wearing a black jacket and blue jeans. The garage is filled with various objects, including a clock on the wall, a pinball machine, and a car. The man appears to be pointing at something, possibly the car. The garage has a white wall and a white door. The overall style of the video is casual and relaxed, with the man appearing to be in a comfortable and familiar environment.',
+              'The video shows a man standing next to a car with a large number of speakers installed in its trunk. The man is wearing a black t-shirt and a baseball cap. He is pointing at one of the speakers, possibly explaining something about it. The car is green and has a unique design with the speakers arranged in a circular pattern. The setting appears to be outdoors, possibly at a car show or a similar event. The style of the video is casual and informative, with a focus on the car and its audio system.',
+              'In the video, a man wearing a red headband is seen enjoying a bowl of food in a bustling market. He is holding the bowl in his left hand and a spoon in his right hand, savoring the taste of the food. The market around him is filled with various stalls and people, creating a lively atmosphere. The mans expression suggests that he is thoroughly enjoying his meal, adding to the overall vibrancy of the scene.',
+              'In the video, a man is seen enjoying a bowl of food in a bustling market. He is wearing a red headband and a black t-shirt, adding a pop of color to the scene. The market is filled with various fruits and vegetables, creating a vibrant and colorful backdrop. The man takes a bite of his food, savoring the flavors. The video captures the lively atmosphere of the market and the man's enjoyment of his meal',
+              'The video features a man standing in a snowy forest. He is wearing a green plaid jacket, a brown hat, and a fur-lined hood. His beard is long and brown. The man is looking directly at the camera with a serious expression. The forest around him is covered in snow, and the trees are bare. The sky is clear and blue. The man is the only person in the frame. The video is shot in a realistic style, with natural lighting and colors.',
+              ]

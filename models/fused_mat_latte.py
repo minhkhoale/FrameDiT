@@ -995,6 +995,20 @@ def FusedMatLatte_XL_64_256_2_concat(**kwargs):
 def FusedMatLatte_M_32_256_2(**kwargs):
     return FusedMatLatte_M_2(qk_col_dim=32, v_col_dim=256, num_col_heads=32, **kwargs)
 
+
+def FusedMatLatte_S_64_64_2_concat(**kwargs):
+    return FusedMatLatte_S_2(qk_col_dim=64, v_col_dim=64, num_col_heads=64, fuse_mode='concat', **kwargs)
+
+def FusedMatLatte_B_64_64_2_concat(**kwargs):
+    return FusedMatLatte_B_2(qk_col_dim=64, v_col_dim=64, num_col_heads=64, fuse_mode='concat', **kwargs)
+
+def FusedMatLatte_L_64_64_2_concat(**kwargs):
+    return FusedMatLatte_L_2(qk_col_dim=64, v_col_dim=64, num_col_heads=64, fuse_mode='concat', **kwargs)
+
+def FusedMatLatte_XL_64_64_2_concat(**kwargs):
+    return FusedMatLatte_XL_2(qk_col_dim=64, v_col_dim=64, num_col_heads=64, fuse_mode='concat', **kwargs)
+
+
 #----------------
 
 # def FusedMatLatte_M_1_64_2_concat(**kwargs):
@@ -1048,6 +1062,10 @@ FusedMatLatte_models = {
     'FusedMatLatte-B/64-256/2-concat': FusedMatLatte_B_64_256_2_concat,
     'FusedMatLatte-L/64-256/2-concat': FusedMatLatte_L_64_256_2_concat,
     'FusedMatLatte-XL/64-256/2-concat': FusedMatLatte_XL_64_256_2_concat,
+    'FusedMatLatte-S/64-64/2-concat': FusedMatLatte_S_64_64_2_concat,
+    'FusedMatLatte-B/64-64/2-concat': FusedMatLatte_B_64_64_2_concat,
+    'FusedMatLatte-L/64-64/2-concat': FusedMatLatte_L_64_64_2_concat,
+    'FusedMatLatte-XL/64-64/2-concat': FusedMatLatte_XL_64_64_2_concat,
     'FusedMatLatte-M/1-64/2-concat': FusedMatLatte_M_1_64_2_concat,
     'FusedMatLatte-M/1-128/2-concat': FusedMatLatte_M_1_128_2_concat,
     'FusedMatLatte-M/1-256/2-concat': FusedMatLatte_M_1_256_2_concat,

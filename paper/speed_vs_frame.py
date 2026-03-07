@@ -761,6 +761,8 @@ if __name__ == "__main__":
 
     # remove 256 frames
     df = df[df['num_frames'] != 256]
+    df = df[df['num_frames'] != 8]
+    print(df)
 
     df['model'] = df['model'].apply(lambda x: 'MatrixDiT-G' if x.startswith('MatLatte') else x)
     df['model'] = df['model'].apply(lambda x: 'MatrixDiT-H' if x.startswith('FusedMatLatte') else x)

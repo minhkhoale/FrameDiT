@@ -191,8 +191,14 @@ def main(args):
         for i, sample in enumerate(samples):
             sample = ((sample * 0.5 + 0.5) * 255).add_(0.5).clamp_(0, 255).to(dtype=torch.uint8).cpu().permute(0, 2, 3, 1).contiguous()
             index = i * dist.get_world_size() + rank + total
-            # Image.fromarray(sample).save(f"{sample_folder_dir}/{index:04d}.png")
-            sample_save_path = f"{sample_folder_dir}/{index:04d}.mp4"
+
+            if y is not None:
+                class_label = y[i].item()
+                print(f"Sample {index}: class {class_label}")
+                sample_save_path = f"{sample_folder_dir}/{index:04d}_class_{class_label}.mp4"
+            else:
+                sample_save_path = f"{sample_folder_dir}/{index:04d}.mp4"
+
             imageio.mimwrite(sample_save_path, sample, fps=8, quality=9)
         total += global_batch_size
 

@@ -61,7 +61,8 @@ class Attention(nn.Module):
             # cause loss nan while using with amp
             # Optionally use the context manager to ensure one of the fused kerenels is run
             with torch.backends.cuda.sdp_kernel(enable_math=False):
-                x = torch.nn.functional.scaled_dot_product_attention(q, k, v).reshape(B, N, C) # require pytorch 2.0
+                x = torch.nn.functional.scaled_dot_product_attention(q, k, v)
+                x = rearrange(x, 'B H L D -> B L (H D)')
 
         elif self.attention_mode == 'math':
             attn = (q @ k.transpose(-2, -1)) * self.scale

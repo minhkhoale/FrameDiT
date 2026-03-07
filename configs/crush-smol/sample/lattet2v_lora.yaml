@@ -1,0 +1,54 @@
+pretrained_model_path: maxin-cn/Latte-1
+pretrained: /scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/results_t2v/debug/latent_text_video512/036-LatteT2V-F16S1-latent_text_video512-lora-r32-alpha32-Compile-Amp-512-loadlatent/checkpoints/0006000.pt
+# model config: 
+model: LatteT2V
+
+use_lora: True
+lora:
+  r: 32
+  lora_alpha: 32
+  lora_dropout: 0.00
+  target_modules:
+    - "to_k"
+    - "to_q"
+    - "to_v"
+    - "to_out.0"
+
+
+num_frames: 16
+video_length: 16
+image_size: [512, 512] # choices=[256, 512]
+in_channels: 4
+num_sampling_steps: 50
+frame_interval: 1
+#fixed_spatial: False
+#attention_bias: True
+learn_sigma: True
+#extras: 2 # [1, 2] 1 unconditional generation, 2 class-conditional generation
+attention_mode: math
+resume_from_checkpoint:
+
+# low VRAM and speed up training
+use_compile: True
+mixed_precision_16bit: True
+mixed_precision: False
+enable_xformers_memory_efficient_attention: False
+gradient_checkpointing: True
+
+beta_start: 0.0001
+beta_end: 0.02
+beta_schedule: "linear"
+variance_type: "learned_range"
+seed: 1
+run_time: 0
+guidance_scale: 7.5
+sample_method: 'DDIM'
+save_img_path: "./sample_videos/t2v-crush-smol/lattet2v_lora"
+# save_img_path: "./sample_videos/t2v/lattet2v"
+enable_vae_temporal_decoder: False
+enable_temporal_attentions: True # LatteT2V-V0: set to False; LatteT2V-V1: set to True
+text_prompt: [
+              'A large metal cylinder is seen pressing down on a pile of Oreo cookies, flattening them as if they were under a hydraulic press.',
+              'A large metal cylinder is seen compressing colorful clay into a compact shape, demonstrating the power of a hydraulic press.',
+              'A large metal cylinder is seen pressing down on a pile of colorful candies, flattening them as if they were under a hydraulic press. The candies are crushed and broken into small pieces, creating a mess on the table'
+              ]

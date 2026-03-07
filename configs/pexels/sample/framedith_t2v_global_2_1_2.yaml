@@ -1,0 +1,61 @@
+pretrained_model_path: maxin-cn/Latte-1
+pretrained: results_t2v/pexels512/010-FrameDiTHT2V-XL-256-2-1-2-global-F16S1-pexels512-Compile-Amp-512-loadlatent/checkpoints/0140000.pt
+# model config: 
+model: FrameDiTHT2V-XL/256-2-1-2-global
+
+use_lora: False
+lora:
+  r: 32
+  lora_alpha: 32
+  lora_dropout: 0.00
+  target_modules:
+    - "to_k"
+    - "to_q"
+    - "to_v"
+    - "to_out.0"
+
+
+num_frames: 16
+video_length: 16
+image_size: [512, 512] # choices=[256, 512]
+in_channels: 4
+num_sampling_steps: 50
+frame_interval: 1
+#fixed_spatial: False
+#attention_bias: True
+learn_sigma: True
+#extras: 2 # [1, 2] 1 unconditional generation, 2 class-conditional generation
+attention_mode: math
+resume_from_checkpoint:
+
+# low VRAM and speed up training
+use_compile: True
+mixed_precision_16bit: True
+mixed_precision: False
+enable_xformers_memory_efficient_attention: False
+gradient_checkpointing: True
+
+beta_start: 0.0001
+beta_end: 0.02
+beta_schedule: "linear"
+variance_type: "learned_range"
+seed: 1
+run_time: 0
+guidance_scale: 7.5
+sample_method: 'DDIM'
+save_img_path: "./sample_videos/t2v-pexels/framedith_global_2_1_2"
+# save_img_path: "./sample_videos/t2v/lattet2v"
+enable_vae_temporal_decoder: False
+enable_temporal_attentions: True # LatteT2V-V0: set to False; LatteT2V-V1: set to True
+text_prompt: [
+              'Typing on Keyboard of MacBook Pro',
+              'Sketching a Concept on Paper',
+              'Blurred Crowd of People Walking',
+              'People Being Served their Food and Getting Ready to Eat',
+              'Yellow and black tropical fish dart through the sea.',
+              'An epic tornado attacking above aglowing city at night.',
+              'Slow pan upward of blazing oak fire in an indoor fireplace.',
+              'a cat wearing sunglasses and working as a lifeguard at pool.',
+              'Sunset over the sea.',
+              'A dog in astronaut suit and sunglasses floating in space.',
+              ]

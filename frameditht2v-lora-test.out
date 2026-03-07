@@ -1,0 +1,10 @@
+starting main
+master addr: h100-m-02
+master port: 19260
+Starting rank=0, local rank=0, seed=3407, world_size=1.
+===============================
+Running in debug mode.
+===============================
+inner_dim 1152
+Model Parameters: 1,396,956,320
+[OpenVidLatentTextDataset] Loaded 200000 rows from 200000 (dropped missing: video_latent=0, text_latent=0).

@@ -17,12 +17,9 @@ import torch.nn as nn
 
 from einops import repeat
 
-<<<<<<< HEAD
-=======
 from .latte_t2v import LatteT2V
 from .framedit_h_t2v import FusedMatrixAttention
 
->>>>>>> 55f319d (code1)
 
 #################################################################################
 #                                  Unet Utils                                   #
@@ -218,13 +215,10 @@ def count_params(model, verbose=False):
     total_params = sum(p.numel() for p in model.parameters())
     if verbose:
         print(f"{model.__class__.__name__} has {total_params * 1.e-6:.2f} M params.")
-<<<<<<< HEAD
-    return total_params
-=======
     return total_params
 
 
-def load_pretrained_latte_into_framedith(framedith_model, latte_pretrained_path, device='cpu'):
+def load_pretrained_latte_into_framedith(framedith_model, latte_pretrained_path, logger, device='cpu'):
     """
     Loads weights from a pretrained LatteT2V model into a FrameDiTHT2V model.
     
@@ -234,7 +228,8 @@ def load_pretrained_latte_into_framedith(framedith_model, latte_pretrained_path,
        - Latte's 'attn1' (Standard Attention) -> FrameDiT's 'attn1.attention' (Local Branch).
        - Matrix Attention branch and Fusion gates remain initialized from scratch.
     """
-    print(f"Loading Latte weights from: {latte_pretrained_path}")
+    if logger:
+        logger.info(f"Loading Latte weights from: {latte_pretrained_path}")
     
     # 1. Load the source Latte model
     # We use the class definition provided in your context or diffusers
@@ -242,7 +237,8 @@ def load_pretrained_latte_into_framedith(framedith_model, latte_pretrained_path,
     try:
         latte_model = LatteT2V.from_pretrained(latte_pretrained_path, subfolder="transformer", video_length=16).to(device)
     except Exception as e:
-        print(f"Could not load as pipeline, trying to load state dict directly...")
+        if logger:
+            logger.info(f"Could not load as pipeline, trying to load state dict directly...")
         latte_state_dict = torch.load(os.path.join(latte_pretrained_path, "diffusion_pytorch_model.bin"), map_location=device)
     else:
         latte_state_dict = latte_model.state_dict()
@@ -252,7 +248,8 @@ def load_pretrained_latte_into_framedith(framedith_model, latte_pretrained_path,
     missing_keys = []
     shape_mismatch_keys = []
 
-    print("Starting weight injection...")
+    if logger:
+        logger.info("Starting weight injection...")
 
     for key, target_param in target_state_dict.items():
         source_key = key
@@ -290,24 +287,27 @@ def load_pretrained_latte_into_framedith(framedith_model, latte_pretrained_path,
         else:
             missing_keys.append(key)
 
-    print("-" * 50)
-    print(f"Successfully loaded {len(loaded_keys)} keys.")
+    if logger:
+        logger.info("-" * 50)
+        logger.info(f"Successfully loaded {len(loaded_keys)} keys.")
     
-    if len(shape_mismatch_keys) > 0:
-        print(f"\n[WARNING] Shape Mismatches (Skipped {len(shape_mismatch_keys)} keys):")
-        for k in shape_mismatch_keys[:5]: print(f" - {k}")
-        if len(shape_mismatch_keys) > 5: print(" ...")
+    if logger:
+        if len(shape_mismatch_keys) > 0:
+            logger.info(f"\n[WARNING] Shape Mismatches (Skipped {len(shape_mismatch_keys)} keys):")
+            for k in shape_mismatch_keys[:5]: logger.info(f" - {k}")
+            if len(shape_mismatch_keys) > 5: logger.info(" ...")
         
     # Filter missing keys to strictly show unexpected missing keys
     # We expect matrix attention keys to be missing
     # unexpected_missing = [k for k in missing_keys if "matrix_attention" not in k and "gamma" not in k and "alpha" not in k and "norm_local" not in k and "norm_global" not in k and "output_linear" not in k]
     unexpected_missing = [k for k in missing_keys if all(x not in k for x in ["matrix_attention", "gamma", "alpha", "norm_local", "norm_global", "output_linear"])]
     
-    if len(unexpected_missing) > 0:
-        print(f"\n[WARNING] Unexpected Missing Keys in Source ({len(unexpected_missing)} keys):")
-        for k in unexpected_missing[:10]: print(f" - {k}")
-    else:
-        print("\n[SUCCESS] All base parameters loaded. Only new Matrix Attention layers are uninitialized.")
+    if logger:
+        if len(unexpected_missing) > 0:
+            logger.info(f"[WARNING] Unexpected Missing Keys in Source ({len(unexpected_missing)} keys):")
+            for k in unexpected_missing[:10]: logger.info(f" - {k}")
+        else:
+            logger.info("[SUCCESS] All base parameters loaded. Only new Matrix Attention layers are uninitialized.")
 
     # Optional: Zero-Initialize the fusion gating parameter 'alpha' if it exists
     # This ensures the model starts exactly as the pretrained Latte model
@@ -319,71 +319,103 @@ def load_pretrained_latte_into_framedith(framedith_model, latte_pretrained_path,
     return framedith_model
 
 
-def freeze_model_for_matrix_training(model):
-    """
-    Freezes the entire model and selectively unfreezes:
-    1. The Matrix Attention branch.
-    2. The Fusion components (Norms, Alphas, Gammas) required to merge Matrix Attn.
-    """
-    print("Freezing base model parameters...")
-    
-    # 1. Freeze EVERYTHING first
-    for param in model.parameters():
-        param.requires_grad = False
+def freeze_model_for_matrix_training(model, logger):
+    # 1) Freeze everything
+    for p in model.parameters():
+        p.requires_grad = False
 
-    # 2. Iterate modules to find FusedMatrixAttention blocks
-    # We only want to unfreeze specific sub-modules within the temporal blocks
-    trainable_param_names = []
+    trainable = []
+
+    # 2) Unfreeze Matrix Attention + fusion inside fused blocks
+    for name, m in model.named_modules():
+        if isinstance(m, FusedMatrixAttention):
+            # logger.info(f"Unfreezing Matrix block: {name}")
+
+            if hasattr(m, "matrix_attention"):
+                for n, p in m.matrix_attention.named_parameters():
+                    p.requires_grad = True
+                    trainable.append(f"{name}.matrix_attention.{n}")
+
+            for attr in ("norm_local", "norm_global", "output_linear", "content_gate"):
+                if hasattr(m, attr) and getattr(m, attr) is not None:
+                    for n, p in getattr(m, attr).named_parameters():
+                        p.requires_grad = True
+                        trainable.append(f"{name}.{attr}.{n}")
+
+            for n, p in m.named_parameters(recurse=False):
+                if n in ("alpha", "gamma_local", "gamma_global"):
+                    p.requires_grad = True
+                    trainable.append(f"{name}.{n}")
+
+    # 3) Unfreeze LoRA params everywhere
+    for n, p in model.named_parameters():
+        if ".A" in n or ".B" in n or "lora" in n.lower():
+            p.requires_grad = True
+            trainable.append(n)
+
+    # logger.info(f"Total trainable params: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
+    return sorted(set(trainable))
+
+
+# def freeze_model_for_matrix_training(model, logger):
+#     """
+#     Freezes the entire model and selectively unfreezes:
+#     1. The Matrix Attention branch.
+#     2. The Fusion components (Norms, Alphas, Gammas) required to merge Matrix Attn.
+#     """
+#     logger.info("Freezing base model parameters...")
     
-    for name, module in model.named_modules():
-        # print('name, module', name, module.__class__.__name__)
-        # Identify the FusedMatrixAttention blocks
-        if isinstance(module, FusedMatrixAttention):
-            print(f"Unfreezing Matrix Attention components in: {name} {module.__class__.__name__} {module.matrix_attention.__class__.__name__}")
+#     # 1. Freeze EVERYTHING first
+#     for param in model.parameters():
+#         param.requires_grad = False
+
+#     # 2. Iterate modules to find FusedMatrixAttention blocks
+#     # We only want to unfreeze specific sub-modules within the temporal blocks
+#     trainable_param_names = []
+    
+#     for name, module in model.named_modules():
+#         # print('name, module', name, module.__class__.__name__)
+#         # Identify the FusedMatrixAttention blocks
+#         if isinstance(module, FusedMatrixAttention):
+#             logger.info(f"Unfreezing Matrix Attention components in: {name} {module.__class__.__name__} {module.matrix_attention.__class__.__name__}")
             
-            # A. Unfreeze the core Matrix Attention mechanism
-            if hasattr(module, 'matrix_attention'):
-                for param in module.matrix_attention.parameters():
-                    param.requires_grad = True
-                    trainable_param_names.append(f"{name}.matrix_attention")
+#             # A. Unfreeze the core Matrix Attention mechanism
+#             if hasattr(module, 'matrix_attention'):
+#                 for param in module.matrix_attention.parameters():
+#                     param.requires_grad = True
+#                     trainable_param_names.append(f"{name}.matrix_attention")
             
-            # B. Unfreeze the Fusion Layers (Norms)
-            # These are new layers added to handle the merge, so they must be trained
-            if hasattr(module, 'norm_global'):
-                for param in module.norm_global.parameters():
-                    param.requires_grad = True
-                    trainable_param_names.append(f"{name}.norm_global")
+#             # B. Unfreeze the Fusion Layers (Norms)
+#             # These are new layers added to handle the merge, so they must be trained
+#             if hasattr(module, 'norm_global'):
+#                 for param in module.norm_global.parameters():
+#                     param.requires_grad = True
+#                     trainable_param_names.append(f"{name}.norm_global")
             
-            if hasattr(module, 'norm_local'):
-                for param in module.norm_local.parameters():
-                    param.requires_grad = True
-                    trainable_param_names.append(f"{name}.norm_local")
+#             if hasattr(module, 'norm_local'):
+#                 for param in module.norm_local.parameters():
+#                     param.requires_grad = True
+#                     trainable_param_names.append(f"{name}.norm_local")
 
-            if hasattr(module, 'output_linear'):
-                for param in module.output_linear.parameters():
-                    param.requires_grad = True
-                    trainable_param_names.append(f"{name}.output_linear")
+#             if hasattr(module, 'output_linear'):
+#                 for param in module.output_linear.parameters():
+#                     param.requires_grad = True
+#                     trainable_param_names.append(f"{name}.output_linear")
 
-            # C. Unfreeze Learnable Gates (Alpha, Gamma)
-            # These are direct parameters of FusedMatrixAttention, not sub-modules
-            # We explicitly list the gate names used in __init__
-            fusion_gates = ['alpha', 'gamma_local', 'gamma_global']
-            for param_name, param in module.named_parameters(recurse=False):
-                if param_name in fusion_gates:
-                    param.requires_grad = True
-                    trainable_param_names.append(f"{name}.{param_name}")
+#             # C. Unfreeze Learnable Gates (Alpha, Gamma)
+#             # These are direct parameters of FusedMatrixAttention, not sub-modules
+#             # We explicitly list the gate names used in __init__
+#             fusion_gates = ['alpha', 'gamma_local', 'gamma_global']
+#             for param_name, param in module.named_parameters(recurse=False):
+#                 if param_name in fusion_gates:
+#                     param.requires_grad = True
+#                     trainable_param_names.append(f"{name}.{param_name}")
 
-    # 3. Validation Stats
-    total_params = sum(p.numel() for p in model.parameters())
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    
-    print("-" * 50)
-    print('Trainable Parameters:', trainable_param_names)
-    print(f"Total Parameters:     {total_params:,}")
-    print(f"Trainable Parameters: {trainable_params:,} ({trainable_params/total_params:.2%})")
-    print("-" * 50)
-    
-    return model
+#         if "lora_" in name:
+#             param.requires_grad = True
+#             trainable_param_names.append(name)
+   
+#     return model
 
 # --- Example Usage in Main ---
 if __name__ == "__main__":
@@ -424,4 +456,3 @@ if __name__ == "__main__":
     # 3. Load
     model = load_pretrained_latte_into_framedith(model, pretrained_path)
     freeze_model_for_matrix_training(model)
->>>>>>> 55f319d (code1)

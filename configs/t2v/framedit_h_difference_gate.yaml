@@ -1,0 +1,73 @@
+# dataset
+dataset: "openvid"
+csv_path: /scratch/s224075134/temporal_diffusion/datasets/video/OpenVid-0.4M/OpenVidHD_top200000.csv
+latent_path: /scratch/s224075134/temporal_diffusion/datasets/video/OpenVid-0.4M/latents
+prompt_latent_path: /scratch/s224075134/temporal_diffusion/datasets/video/OpenVid-0.4M/prompts_latents
+drop_missing: True
+return_tokens_if_available: False
+load_latent: True
+
+# save and load
+results_dir: "./results_t2v"
+pretrained_latte: maxin-cn/Latte-1 # LatteT2V ckpt
+pretrained_model_path: maxin-cn/Latte-1
+pretrained:
+
+vae: "./configs/vae/lattet2v_autoencoder_kl.yaml"
+tokenizer: "./configs/tokenizer/t5.yaml"
+
+use_lora: False
+lora:
+  r: 16
+  lora_alpha: 16
+  lora_dropout: 0.01
+  target_modules:
+    - "to_k"
+    - "to_q"
+    - "to_v"
+    - "to_out.0"
+
+# model config: 
+model:  FrameDiTHT2V-XL/256-2-1-1-difference_content_based_gated
+gate_initialziation: "uniform"
+# model: LatteT2V
+num_frames: 16
+video_length: 16
+image_size: 512 # choices=[256, 512]
+in_channels: 4
+num_sampling_steps: 250
+frame_interval: 1
+#fixed_spatial: False
+#attention_bias: True
+learn_sigma: True
+#extras: 2 # [1, 2] 1 unconditional generation, 2 class-conditional generation
+attention_mode: math
+resume_from_checkpoint:
+
+# train config:
+save_ceph: True # important
+#use_image_num: 8
+learning_rate: 1e-3
+ckpt_every: 5000
+clip_max_norm: 0.5
+start_clip_iter: 35000
+local_batch_size: 8 # important
+max_train_steps: 1000000
+global_seed: 3407
+num_workers: 8
+log_every: 5
+lr_warmup_steps: 5000
+gradient_accumulation_steps: 1 # TODO
+ema_update_every: 5
+
+# low VRAM and speed up training
+use_compile: True
+mixed_precision_16bit: True
+mixed_precision: False
+enable_xformers_memory_efficient_attention: True
+gradient_checkpointing: True
+n_checkpointing_blocks: 28
+offload_ema: True
+offload_vae: True
+
+project: vdm
