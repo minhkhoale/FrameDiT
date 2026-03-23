@@ -1,0 +1,44 @@
+# dataset
+dataset: "ucf101"
+
+data_path:
+load_latent: False
+num_workers: 8
+vae: "configs/vae/autoencoder_kl.yaml"
+
+# save and load
+results_dir: "./results"
+global_seed: 0
+
+# model config: 
+model: FrameDiTG-XL/128-512/2
+num_frames: 16
+image_size: 256 # choices=[256, 512]
+in_channels: 4
+num_sampling_steps: 250
+frame_interval: 3
+fixed_spatial: False
+attention_bias: True
+learn_sigma: True # important
+extras: 2 # [1, 2, 3] 1: unconditional, 2: class-conditional, 3: action-conditioned
+num_classes: # only for 3: class-conditional
+pretrained:
+
+# train config:
+learning_rate: 1e-4
+lr_warmup_steps: 0
+local_batch_size: 4
+gradient_accumulation_steps: 4
+
+max_train_steps: 1000000
+ckpt_every: 10000
+log_every: 5
+
+clip_max_norm: 0.1
+start_clip_iter: 20000
+
+# low VRAM and speed up training
+use_compile: True
+mixed_precision: bf16
+
+project: # wandb project name for logging
