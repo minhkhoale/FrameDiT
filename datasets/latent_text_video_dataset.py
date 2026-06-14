@@ -63,7 +63,7 @@ class LatentTextVideoDataset(Dataset):
                     if filename.endswith(".pt"):
                         self.files.append((idx, os.path.join(root, filename)))
         
-        for i, ltn_path in enumerate(latent_path):
+        for i, ltn_path in enumerate(self.data_root):
             load_latent(ltn_path, i)
 
     def __len__(self) -> int:

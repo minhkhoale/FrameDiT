@@ -108,6 +108,7 @@ def main(args):
         model.to(dtype=torch.float16)
         # text_encoder.to(dtype=torch.float16)
     
+    args.cfg_scale = getattr(args, 'cfg_scale', 1.0)
     assert args.cfg_scale >= 1.0, "In almost all cases, cfg_scale be >= 1.0"
     print('args.cfg_scale', args.cfg_scale)
     using_cfg = args.cfg_scale > 1.0
@@ -159,12 +160,14 @@ def main(args):
         # Setup classifier-free guidance:
         if using_cfg:
             z = torch.cat([z, z], 0)
-            y = torch.randint(0, args.num_classes, (n,), device=device)
+            # y = torch.randint(0, args.num_classes, (n,), device=device)
+            y = torch.ones((n,), dtype=torch.long, device=device) * 5  # Use class 101 as the "null" class for CFG, since UCF101 has 101 classes
             y_null = torch.tensor([101] * n, device=device)
             y = torch.cat([y, y_null], dim=0)
             model_kwargs = dict(y=y, cfg_scale=args.cfg_scale, use_fp16=args.use_fp16)
             sample_fn = model.forward_with_cfg
         else:
+            y=None
             model_kwargs = dict(y=None, use_fp16=args.use_fp16)
             sample_fn = model.forward
 
@@ -194,11 +197,11 @@ def main(args):
 
             if y is not None:
                 class_label = y[i].item()
-                print(f"Sample {index}: class {class_label}")
                 sample_save_path = f"{sample_folder_dir}/{index:04d}_class_{class_label}.mp4"
             else:
                 sample_save_path = f"{sample_folder_dir}/{index:04d}.mp4"
 
+            print('sample_save_path', sample_save_path)
             imageio.mimwrite(sample_save_path, sample, fps=8, quality=9)
         total += global_batch_size
 
@@ -221,7 +224,7 @@ if __name__ == "__main__":
     parser.add_argument('--seed', type=int, help='Random seed for sampling', default=0)
     parser.add_argument('--sample-method', type=str, help='Sampling method', default='ddpm')
     parser.add_argument('--num-sampling-steps', type=int, help='Number of sampling steps', default=50)
-    parser.add_argument('--cfg-scale', type=float, help='Classifier-free guidance scale', default=1.0)
+    parser.add_argument('--cfg-scale', type=float, help='Classifier-free guidance scale', default=None)
     parser.add_argument('--negative-name', type=str, help='Negative prompt name', default='')
     parser.add_argument('--batch-size', type=int, help='Batch size for sampling', default=4)
     parser.add_argument('--num-fvd-samples', type=int, help='Number of samples for FVD', default=2048)
@@ -237,7 +240,9 @@ if __name__ == "__main__":
     omega_conf.seed = args.seed
     omega_conf.sample_method = args.sample_method
     omega_conf.num_sampling_steps = args.num_sampling_steps
-    omega_conf.cfg_scale = args.cfg_scale
+    if args.cfg_scale is not None:
+        omega_conf.cfg_scale = args.cfg_scale
+
     omega_conf.negative_name = args.negative_name
 
     omega_conf.use_fp16 = False

@@ -1,5 +1,5 @@
 pretrained_model_path: maxin-cn/Latte-1
-pretrained: results_t2v/pexels512/011-FrameDiTHT2V-XL-256-2-1-2-concat-F16S1-pexels512-Compile-Amp-512-loadlatent/checkpoints/0395000.pt
+pretrained: /scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/results_t2v/pexels512/011-FrameDiTHT2V-XL-256-2-1-2-concat-F16S1-pexels512-Compile-Amp-512-loadlatent/checkpoints/0700000.pt
 # model config: 
 model: FrameDiTHT2V-XL/256-2-1-2-concat
 

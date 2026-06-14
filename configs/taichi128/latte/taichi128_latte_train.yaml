@@ -19,7 +19,7 @@ num_sampling_steps: 250
 frame_interval: 3
 fixed_spatial: False
 attention_bias: True
-learn_sigma: True
+learn_sigma: False
 extras: 1 # [1, 2] 1 unconditional generation, 2 class-conditional generation
 
 # train config:
@@ -39,10 +39,11 @@ gradient_accumulation_steps: 3 # TODO
 num_classes:
 
 # low VRAM and speed up training TODO
-use_compile: False
+use_compile: True
+mixed_precision_16bit: True
 mixed_precision: False
 enable_xformers_memory_efficient_attention: False
 gradient_checkpointing: False
 
 # Wandb logger
-project: vdm
+project: 

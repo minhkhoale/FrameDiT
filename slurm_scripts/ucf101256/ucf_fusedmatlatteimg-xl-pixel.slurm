@@ -9,11 +9,11 @@
 #SBATCH --mem=64G
 #SBATCH --cpus-per-task=6
 #SBATCH --time=60:00:00
-#SBATCH --output=slurm_log/UCF-fusedmatlatteimg-xl-pixel-%j.out 
-#SBATCH --error=slurm_log/UCF-fusedmatlatteimg-xl-pixel-%j.err
+#SBATCH --output=slurm_log/UCF/%x-%j.out 
+#SBATCH --error=slurm_log/UCF/%x-%j.err
 
 source ~/.bashrc
 
-conda activate latte
+conda activate tn
 
 srun python train_with_img.py --config ./configs/ucf101/fusedmatlatteimg/ucf101_fusedmatlatteimg-xl-pixel_train.yaml "$@"

@@ -17,3 +17,4 @@ __pycache__/
 pretrained
 results_t2v
 results_t2v/*
+paper/qualitative_video

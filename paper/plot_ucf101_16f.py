@@ -6,11 +6,7 @@ import imageio
 
 methods = [
     'Latte',
-<<<<<<< HEAD
-    'Full 3D',
-=======
     'AR-Diffusion',
->>>>>>> 55f319d (code1)
     'FrameDiT-G',
     'FrameDiT-H',
 ]
@@ -61,17 +57,6 @@ def plot_videos_from_paths(video_paths, frame_indices, figsize=(16, 4), two_rows
             axes[v_idx, f_idx].imshow(frames[frame_index])
             axes[v_idx, f_idx].axis("off")
         
-<<<<<<< HEAD
-        if v_idx % 3 == 1:
-            print('v_idx', v_idx)
-            mid_row = v_idx 
-            fig.text(
-                0.01,  # x-position on figure
-                1 - (mid_row + 0.5) / (3 * 4),  # convert row index to figure y
-                methods[v_idx // 3],
-                va='center', ha='left', fontsize=14,rotation=90
-                    )
-=======
         # if v_idx % 3 == 1:
         #     print('v_idx', v_idx)
         mid_row = v_idx 
@@ -81,7 +66,6 @@ def plot_videos_from_paths(video_paths, frame_indices, figsize=(16, 4), two_rows
             methods[v_idx % 4],
             va='center', ha='left', fontsize=14,rotation=90
                 )
->>>>>>> 55f319d (code1)
 
 
 
@@ -94,32 +78,15 @@ def plot_videos_from_paths(video_paths, frame_indices, figsize=(16, 4), two_rows
 
 
 videos = [
-    '/scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/paper/qualitative_video/ucf/latte/0050.mp4',
-<<<<<<< HEAD
-    '/scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/paper/qualitative_video/ucf/latte/0062.mp4',
-    '/scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/paper/qualitative_video/ucf/latte/0065.mp4',
-    '/scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/paper/qualitative_video/ucf/ar/videos0027_b00_0.mp4',
-    '/scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/paper/qualitative_video/ucf/ar/videos0089_b00_0.mp4',
-    '/scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/paper/qualitative_video/ucf/ar/videos0140_b00_0.mp4',
-    '/scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/paper/qualitative_video/ucf/framedit-g/0025.mp4',
-    '/scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/paper/qualitative_video/ucf/framedit-g/0040.mp4',
-    '/scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/paper/qualitative_video/ucf/framedit-g/0052.mp4',
-    '/scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/paper/qualitative_video/ucf/framedit-h/0057.mp4',
-    '/scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/paper/qualitative_video/ucf/framedit-h/0094.mp4',
-    '/scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/paper/qualitative_video/ucf/framedit-h/0291.mp4',
-=======
-    '/scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/paper/qualitative_video/ucf/ar/videos0089_b00_0.mp4',
-    '/scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/paper/qualitative_video/ucf/framedit-g/0040.mp4',
-    '/scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/paper/qualitative_video/ucf/framedit-h/0094.mp4',
-    '/scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/paper/qualitative_video/ucf/latte/0062.mp4',
-    # '/scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/paper/qualitative_video/ucf/latte/0065.mp4',
-    #'/scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/paper/qualitative_video/ucf/ar/videos0027_b00_0.mp4',
-    '/scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/paper/qualitative_video/ucf/ar/videos0140_b00_0.mp4',
-    '/scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/paper/qualitative_video/ucf/framedit-g/0025.mp4',
-    #'/scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/paper/qualitative_video/ucf/framedit-g/0052.mp4',
-    '/scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/paper/qualitative_video/ucf/framedit-h/0057.mp4',
-    #'/scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/paper/qualitative_video/ucf/framedit-h/0291.mp4',
->>>>>>> 55f319d (code1)
+    '/scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/paper/qualitative_video/ucf/latte/0036_class_20.mp4',
+    '/scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/paper/qualitative_video/ucf/ar/videos0088_b02_0_lifting.mp4',
+    '/scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/paper/qualitative_video/ucf/framedit-g/0098_class_20.mp4',
+    '/scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/paper/qualitative_video/ucf/framedit-h/0148_class_20.mp4',
+
+    '/scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/paper/qualitative_video/ucf/latte/0033_class_5.mp4',
+    '/scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/paper/qualitative_video/ucf/ar/videos0020_b00_0_class_5.mp4',
+    '/scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/paper/qualitative_video/ucf/framedit-g/0093_class_5.mp4',
+    '/scratch/s224075134/temporal_diffusion/video-diffusion-model-v2/paper/qualitative_video/ucf/framedit-h/0137_class_5.mp4',
 ]   # each video: numpy array [T, H, W, C]
 frame_indices = [i for i in range(0, 16, 2)]  # 8 frames
 
