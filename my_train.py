@@ -180,7 +180,7 @@ def main(args):
     dataset = get_dataset(args)
     logger.info(f"Dataset {dataset}")
     if args.load_latent:
-        logger.info(f"Loading latent from {args.latent_path}")
+        logger.info(f"Loading latent from {args.data_path}")
     else:
         logger.info(f"Loading video from {args.data_path}")
 
@@ -284,7 +284,7 @@ def main(args):
 
             t = torch.randint(0, diffusion.num_timesteps, (x.shape[0],), device=device)
 
-            if args.mixed_precision_16bit:
+            if args.mixed_precision:
                 with torch.amp.autocast(dtype=torch.bfloat16, device_type='cuda'):
                     loss_dict = diffusion.training_losses(model, x, t, model_kwargs)
                     loss = loss_dict["loss"].mean() / args.gradient_accumulation_steps

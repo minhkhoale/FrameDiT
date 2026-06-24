@@ -108,7 +108,16 @@ def main(args):
         sigma_small=args.sigma_small if 'sigma_small' in args else False,
         predict_xstart=args.predict_xstart if 'predict_xstart' in args else False,
         learn_sigma=args.learn_sigma if 'learn_sigma' in args else True,
+        adaptive_frequency=args.get('adaptive_frequency', False),
+        adaptive_frequency_gamma=args.get('adaptive_frequency_gamma', 0.5),
+        adaptive_frequency_learnable_gamma=args.get('adaptive_frequency_learnable_gamma', False),
+        adaptive_frequency_power_path=args.get('adaptive_frequency_power_path', None),
+        adaptive_frequency_power_exponent=args.get('adaptive_frequency_power_exponent', 2.0),
+        adaptive_frequency_num_temporal_bands=args.get('adaptive_frequency_num_temporal_bands', None),
+        adaptive_frequency_num_spatial_bands=args.get('adaptive_frequency_num_spatial_bands', None),
     )  # default: 1000 steps, linear noise schedule
+    for p in diffusion.adaptive_frequency_parameters():
+        p.data = p.data.to(device)
     print('diffusion', diffusion)
 
     vae = get_vae(OmegaConf.load(args.vae)).to(device)
@@ -116,6 +125,8 @@ def main(args):
     # # use pretrained model?
     if args.pretrained:
         checkpoint = torch.load(args.pretrained, map_location=lambda storage, loc: storage)
+        if isinstance(checkpoint, dict) and "adaptive_frequency" in checkpoint:
+            diffusion.load_adaptive_frequency_state_dict(checkpoint["adaptive_frequency"])
         if "ema" in checkpoint:  # supports checkpoints from train.py
             logger.info('Using ema ckpt!')
             checkpoint = checkpoint["ema"]
@@ -164,7 +175,11 @@ def main(args):
         model = torch.compile(model)
 
     logger.info(f"Model Parameters: {sum(p.numel() for p in model.parameters()):,}")
-    opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0)
+    opt = torch.optim.AdamW(
+        list(model.parameters()) + list(diffusion.adaptive_frequency_parameters()),
+        lr=1e-4,
+        weight_decay=0,
+    )
 
     # Freeze vae and text_encoder
     vae.requires_grad_(False)
@@ -308,6 +323,8 @@ def main(args):
                 else:
                     gradient_norm = clip_grad_norm_(model.module.parameters(), args.clip_max_norm, clip_grad=True)
             
+                diffusion.synchronize_adaptive_frequency_gradients()
+
                 if args.mixed_precision_16bit:
                     scaler.step(opt)
                     scaler.update()
@@ -360,7 +377,8 @@ def main(args):
                     checkpoint = {
                         "model": model.module.state_dict(),
                         "ema": ema.state_dict(),
-                        "train_steps": train_steps
+                        "train_steps": train_steps,
+                        "adaptive_frequency": diffusion.adaptive_frequency_state_dict(),
                     }
                     checkpoint_path = f"{checkpoint_dir}/{train_steps:07d}.pt"
                     torch.save(checkpoint, checkpoint_path)

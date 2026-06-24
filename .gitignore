@@ -17,4 +17,8 @@ __pycache__/
 pretrained
 results_t2v
 results_t2v/*
+results_adaptive_timesteps
+results_adaptive_schedule
 paper/qualitative_video
+sample/ucf101128_adaptive_schedule
+sample/ucf101256_adaptive_schedule

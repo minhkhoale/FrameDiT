@@ -33,6 +33,40 @@ from vae import get_vae, decode_video
 os.environ['TORCH_DISTRIBUTED_DEBUG'] = 'DETAIL'
 
 
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ("yes", "true", "t", "1"):
+        return True
+    if v.lower() in ("no", "false", "f", "0"):
+        return False
+    raise argparse.ArgumentTypeError("Boolean value expected.")
+
+
+def setup_runtime(args):
+    use_dist = "RANK" in os.environ and "WORLD_SIZE" in os.environ
+    if use_dist:
+        dist.init_process_group("nccl")
+        rank = dist.get_rank()
+        world_size = dist.get_world_size()
+        local_rank = int(os.environ.get("LOCAL_RANK", rank % torch.cuda.device_count()))
+    else:
+        rank = 0
+        world_size = 1
+        local_rank = 0
+
+    device = local_rank % torch.cuda.device_count()
+    torch.cuda.set_device(device)
+    if args.seed is not None:
+        torch.manual_seed(args.seed * world_size + rank)
+    return use_dist, rank, world_size, device
+
+
+def maybe_barrier(use_dist):
+    if use_dist:
+        dist.barrier()
+
+
 def create_npz_from_sample_folder(sample_dir, num=50_000):
     """
     Builds a single .npz file from a folder of .png samples.
@@ -55,17 +89,10 @@ def main(args):
     Run sampling.
     """
     torch.backends.cuda.matmul.allow_tf32 = True  # True: fast but may lead to some small numerical differences
-    assert torch.cuda.is_available(), "Sampling with DDP requires at least one GPU. sample.py supports CPU-only usage"
+    assert torch.cuda.is_available(), "Sampling requires at least one GPU. sample.py supports CPU-only usage"
     torch.set_grad_enabled(False)
 
-    # Setup DDP:
-    dist.init_process_group("nccl")
-    rank = dist.get_rank()
-    device = rank % torch.cuda.device_count()
-    if args.seed is not None:
-        seed = args.seed * dist.get_world_size() + rank
-        torch.manual_seed(seed)
-    torch.cuda.set_device(device)
+    use_dist, rank, world_size, device = setup_runtime(args)
     # print(f"Starting rank={rank}, seed={seed}, world_size={dist.get_world_size()}.")
 
     if args.ckpt is None:
@@ -95,10 +122,35 @@ def main(args):
         sigma_small=args.sigma_small if 'sigma_small' in args else False,
         predict_xstart=args.predict_xstart if 'predict_xstart' in args else False,
         learn_sigma=args.learn_sigma if 'learn_sigma' in args else True,
+        adaptive_frequency=args.get('adaptive_frequency', False),
+        adaptive_frequency_gamma=args.get('adaptive_frequency_gamma', 0.5),
+        adaptive_frequency_learnable_gamma=args.get('adaptive_frequency_learnable_gamma', False),
+        adaptive_frequency_gamma_mode=args.get('adaptive_frequency_gamma_mode', 'scalar'),
+        adaptive_frequency_power_path=args.get('adaptive_frequency_power_path', None),
+        adaptive_frequency_power_exponent=args.get('adaptive_frequency_power_exponent', 2.0),
+        adaptive_frequency_num_temporal_bands=args.get('adaptive_frequency_num_temporal_bands', None),
+        adaptive_frequency_num_spatial_bands=args.get('adaptive_frequency_num_spatial_bands', None),
+        equal_snr=args.get('equal_snr', False),
+        equal_snr_power_path=args.get('equal_snr_power_path', None),
+        equal_snr_power_scale=args.get('equal_snr_power_scale', 1.0),
+        equal_snr_power_exponent=args.get('equal_snr_power_exponent', 2.0),
+        equal_snr_calibrate_schedule=args.get('equal_snr_calibrate_schedule', False),
     )  # default: 1000 steps, linear noise schedule
+    diffusion.initialize_adaptive_frequency_for_shape((1, args.num_frames, args.in_channels, latent_size, latent_size), device)
+    checkpoint = torch.load(ckpt_path, map_location="cpu")
+    if isinstance(checkpoint, dict) and "adaptive_frequency" in checkpoint:
+        diffusion.load_adaptive_frequency_state_dict(checkpoint["adaptive_frequency"])
+    if isinstance(checkpoint, dict) and "equal_snr" in checkpoint:
+        diffusion.load_equal_snr_state_dict(checkpoint["equal_snr"])
+    for p in diffusion.adaptive_frequency_parameters():
+        p.data = p.data.to(device)
+    for p in diffusion.equal_snr_parameters():
+        p.data = p.data.to(device)
     print('diffusion', diffusion)
     print('sampling method', args.sample_method)
     print('num_sampling_steps', args.num_sampling_steps)
+    if diffusion.equal_snr.enabled and args.sample_method != "ddim":
+        raise ValueError("EqualSNR checkpoints must be sampled with --sample-method ddim")
 
     vae = get_vae(OmegaConf.load(args.vae)).to(device)
     
@@ -125,43 +177,48 @@ def main(args):
     if rank == 0:
         os.makedirs(sample_folder_dir, exist_ok=True)
         print(f"Saving .mp4 samples at {sample_folder_dir}")
+    maybe_barrier(use_dist)
     
     # check existing videos and skip them
     n_existing_video = len([name for name in os.listdir(sample_folder_dir) if os.path.isfile(os.path.join(sample_folder_dir, name)) and name.endswith('.mp4')])
     if n_existing_video > 0:
         print(f"Found {n_existing_video} existing videos in {sample_folder_dir}, skipping them.")
     
-    args.num_fvd_samples -= n_existing_video
+    args.num_fvd_samples = max(0, args.num_fvd_samples - n_existing_video)
     
-    dist.barrier()
+    maybe_barrier(use_dist)
 
     # Figure out how many samples we need to generate on each GPU and how many iterations we need to run:
     n = args.per_proc_batch_size
-    global_batch_size = n * dist.get_world_size()
+    global_batch_size = n * world_size
     # To make things evenly-divisible, we'll sample a bit more than we need and then discard the extra samples:
     total_samples = int(math.ceil(args.num_fvd_samples / global_batch_size) * global_batch_size)
 
     if rank == 0:
         print(f"Total number of images that will be sampled: {total_samples}")
-    assert total_samples % dist.get_world_size() == 0, "total_samples must be divisible by world_size"
-    samples_needed_this_gpu = int(total_samples // dist.get_world_size())
+    assert total_samples % world_size == 0, "total_samples must be divisible by world_size"
+    samples_needed_this_gpu = int(total_samples // world_size)
     assert samples_needed_this_gpu % n == 0, "samples_needed_this_gpu must be divisible by the per-GPU batch size"
     iterations = int(samples_needed_this_gpu // n)
     pbar = range(iterations)
     pbar = tqdm(pbar) if rank == 0 else pbar
     total = n_existing_video
+    idx = 0
     for _ in pbar:
         # Sample inputs:
         if args.use_fp16:
             z = torch.randn(n, args.num_frames, args.in_channels, latent_size, latent_size, dtype=torch.float16, device=device)
         else:
             z = torch.randn(n, args.num_frames, args.in_channels, latent_size, latent_size, device=device)
+        if diffusion.equal_snr.enabled:
+            z = diffusion.equal_snr.colored_noise(z)
         
         # Setup classifier-free guidance:
         if using_cfg:
             z = torch.cat([z, z], 0)
             # y = torch.randint(0, args.num_classes, (n,), device=device)
-            y = torch.ones((n,), dtype=torch.long, device=device) * 5  # Use class 101 as the "null" class for CFG, since UCF101 has 101 classes
+            y = torch.ones((n,), dtype=torch.long, device=device) * idx  # Use class 101 as the "null" class for CFG, since UCF101 has 101 classes
+            idx = (idx + 1)%100
             y_null = torch.tensor([101] * n, device=device)
             y = torch.cat([y, y_null], dim=0)
             model_kwargs = dict(y=y, cfg_scale=args.cfg_scale, use_fp16=args.use_fp16)
@@ -193,7 +250,7 @@ def main(args):
         # Save samples to disk as individual .png files
         for i, sample in enumerate(samples):
             sample = ((sample * 0.5 + 0.5) * 255).add_(0.5).clamp_(0, 255).to(dtype=torch.uint8).cpu().permute(0, 2, 3, 1).contiguous()
-            index = i * dist.get_world_size() + rank + total
+            index = i * world_size + rank + total
 
             if y is not None:
                 class_label = y[i].item()
@@ -206,12 +263,13 @@ def main(args):
         total += global_batch_size
 
     # Make sure all processes have finished saving their samples before attempting to convert to .npz
-    dist.barrier()
+    maybe_barrier(use_dist)
     # if rank == 0:
     #     create_npz_from_sample_folder(sample_folder_dir, args.num_fvd_samples)
     #     print("Done.")
     # dist.barrier()
-    dist.destroy_process_group()
+    if use_dist:
+        dist.destroy_process_group()
 
 
 if __name__ == "__main__":
@@ -220,7 +278,7 @@ if __name__ == "__main__":
     parser.add_argument("--ckpt", type=str, default="")
     parser.add_argument("--save_video_path", type=str, default="./sample_videos/")
 
-    parser.add_argument('--use-fp16', type=bool, help='Use half precision for inference', default=False)
+    parser.add_argument('--use-fp16', type=str2bool, nargs='?', const=True, help='Use half precision for inference', default=False)
     parser.add_argument('--seed', type=int, help='Random seed for sampling', default=0)
     parser.add_argument('--sample-method', type=str, help='Sampling method', default='ddpm')
     parser.add_argument('--num-sampling-steps', type=int, help='Number of sampling steps', default=50)
@@ -245,7 +303,7 @@ if __name__ == "__main__":
 
     omega_conf.negative_name = args.negative_name
 
-    omega_conf.use_fp16 = False
+    omega_conf.use_fp16 = args.use_fp16
     omega_conf.fps = args.fps
     omega_conf.video_quality = args.video_quality
 

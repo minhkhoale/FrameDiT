@@ -65,7 +65,17 @@ def main(args):
     model.load_state_dict(state_dict)
 
     model.eval()  # important!
-    diffusion = create_diffusion(str(args.num_sampling_steps))
+    diffusion = create_diffusion(
+        str(args.num_sampling_steps),
+        adaptive_frequency=args.get('adaptive_frequency', False),
+        adaptive_frequency_gamma=args.get('adaptive_frequency_gamma', 0.5),
+        adaptive_frequency_learnable_gamma=args.get('adaptive_frequency_learnable_gamma', False),
+        adaptive_frequency_gamma_mode=args.get('adaptive_frequency_gamma_mode', 'scalar'),
+        adaptive_frequency_power_path=args.get('adaptive_frequency_power_path', None),
+        adaptive_frequency_power_exponent=args.get('adaptive_frequency_power_exponent', 2.0),
+        adaptive_frequency_num_temporal_bands=args.get('adaptive_frequency_num_temporal_bands', None),
+        adaptive_frequency_num_spatial_bands=args.get('adaptive_frequency_num_spatial_bands', None),
+    )
     # vae = AutoencoderKL.from_pretrained(args.pretrained_model_path).to(device)
     # vae = AutoencoderKL.from_pretrained(args.pretrained_model_path, subfolder="vae").to(device)
     # text_encoder = TextEmbedder().to(device)
@@ -84,6 +94,13 @@ def main(args):
         z = torch.randn(1, args.num_frames, args.in_channels, latent_size, latent_size, dtype=torch.float16, device=device) # b c f h w
     else:
         z = torch.randn(1, args.num_frames, args.in_channels, latent_size, latent_size, device=device)
+
+    diffusion.initialize_adaptive_frequency_for_shape(z.shape, device, dtype=z.dtype)
+    checkpoint = torch.load(ckpt_path, map_location="cpu")
+    if isinstance(checkpoint, dict) and "adaptive_frequency" in checkpoint:
+        diffusion.load_adaptive_frequency_state_dict(checkpoint["adaptive_frequency"])
+    for p in diffusion.adaptive_frequency_parameters():
+        p.data = p.data.to(device)
 
     # Setup classifier-free guidance:
     # z = torch.cat([z, z], 0)

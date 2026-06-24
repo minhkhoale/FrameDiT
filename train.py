@@ -91,7 +91,18 @@ def main(args):
     args.latent_size = sample_size
     model = get_models(args)
     
-    diffusion = create_diffusion(timestep_respacing="")  # default: 1000 steps, linear noise schedule
+    diffusion = create_diffusion(
+        timestep_respacing="",
+        adaptive_frequency=args.get('adaptive_frequency', False),
+        adaptive_frequency_gamma=args.get('adaptive_frequency_gamma', 0.5),
+        adaptive_frequency_learnable_gamma=args.get('adaptive_frequency_learnable_gamma', False),
+        adaptive_frequency_power_path=args.get('adaptive_frequency_power_path', None),
+        adaptive_frequency_power_exponent=args.get('adaptive_frequency_power_exponent', 2.0),
+        adaptive_frequency_num_temporal_bands=args.get('adaptive_frequency_num_temporal_bands', None),
+        adaptive_frequency_num_spatial_bands=args.get('adaptive_frequency_num_spatial_bands', None),
+    )  # default: 1000 steps, linear noise schedule
+    for p in diffusion.adaptive_frequency_parameters():
+        p.data = p.data.to(device)
     # vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-ema").to(device)
     # vae = AutoencoderKL.from_pretrained(args.pretrained_model_path, subfolder="vae").to(device)
     vae = get_vae(OmegaConf.load(args.vae)).to(device)
@@ -99,6 +110,8 @@ def main(args):
     # # use pretrained model?
     if args.pretrained:
         checkpoint = torch.load(args.pretrained, map_location=lambda storage, loc: storage)
+        if isinstance(checkpoint, dict) and "adaptive_frequency" in checkpoint:
+            diffusion.load_adaptive_frequency_state_dict(checkpoint["adaptive_frequency"])
         if "ema" in checkpoint:  # supports checkpoints from train.py
             logger.info('Using ema ckpt!')
             checkpoint = checkpoint["ema"]
@@ -128,7 +141,11 @@ def main(args):
     model = DDP(model.to(device), device_ids=[local_rank])
 
     logger.info(f"Model Parameters: {sum(p.numel() for p in model.parameters()):,}")
-    opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0)
+    opt = torch.optim.AdamW(
+        list(model.parameters()) + list(diffusion.adaptive_frequency_parameters()),
+        lr=1e-4,
+        weight_decay=0,
+    )
 
     # Freeze vae and text_encoder
     vae.requires_grad_(False)
@@ -232,6 +249,7 @@ def main(args):
             
             lr_scheduler.step()
             if train_steps % args.gradient_accumulation_steps == 0 and train_steps > 0:
+                diffusion.synchronize_adaptive_frequency_gradients()
                 opt.step()
                 opt.zero_grad()
                 update_ema(ema, model.module)
@@ -264,6 +282,7 @@ def main(args):
                     checkpoint = {
                         "model": model.module.state_dict(),
                         "ema": ema.state_dict(),
+                        "adaptive_frequency": diffusion.adaptive_frequency_state_dict(),
                         # "opt": opt.state_dict(),
                         # "args": args
                     }

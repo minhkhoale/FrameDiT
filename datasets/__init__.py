@@ -1,4 +1,5 @@
 from torchvision import transforms
+from torch.utils.data import IterableDataset
 from datasets import video_transforms
 from .sky_datasets import Sky
 from .sky_latent_datasets import SkyLatent
@@ -6,6 +7,7 @@ from .sky_image_datasets import SkyImages
 from .sky_image_latent_datasets import SkyImagesLatent
 from .bair_datasets import BAIR
 from .ucf101_datasets import UCF101
+from .ucf101_latent_datasets import UCF101Latent
 from .ucf101_image_datasets import UCF101Images
 from .ucf101_image_latent_datasets import UCF101ImagesLatent
 from .ffs_datasets import FaceForensics

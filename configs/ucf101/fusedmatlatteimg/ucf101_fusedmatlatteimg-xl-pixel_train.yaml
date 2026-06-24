@@ -1,7 +1,7 @@
 # dataset
-dataset: "ucf101_img"
+# dataset: "ucf101_img"
+dataset: "ucf101"
 
-image_path: "/scratch/s224075134/temporal_diffusion/datasets/video/ucf101/images/"
 data_path: "/scratch/s224075134/temporal_diffusion/datasets/video/ucf101/video"
 latent_path: 
 load_latent: False

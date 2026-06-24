@@ -8,8 +8,10 @@ import math
 
 import numpy as np
 import torch as th
+import torch.distributed as dist
 import enum
 
+from .adaptive_frequency import AdaptiveFrequencyTimesteps, EqualSNRFourier
 from .diffusion_utils import discretized_gaussian_log_likelihood, normal_kl
 
 
@@ -156,12 +158,18 @@ class GaussianDiffusion:
         betas,
         model_mean_type,
         model_var_type,
-        loss_type
+        loss_type,
+        adaptive_frequency_kwargs=None,
+        equal_snr_kwargs=None,
     ):
 
         self.model_mean_type = model_mean_type
         self.model_var_type = model_var_type
         self.loss_type = loss_type
+        self.adaptive_frequency = AdaptiveFrequencyTimesteps(**(adaptive_frequency_kwargs or {}))
+        self.equal_snr = EqualSNRFourier(**(equal_snr_kwargs or {}))
+        if self.adaptive_frequency.enabled and self.equal_snr.enabled:
+            raise ValueError("adaptive_frequency and equal_snr cannot both be enabled")
 
         # Use float64 for accuracy.
         betas = np.array(betas, dtype=np.float64)
@@ -206,7 +214,39 @@ class GaussianDiffusion:
         f"  num_timesteps: {self.num_timesteps}\n" \
         f"  model_mean_type: {self.model_mean_type}\n" \
         f"  model_var_type: {self.model_var_type}\n" \
-        f"  loss_type: {self.loss_type}"
+        f"  loss_type: {self.loss_type}\n" \
+        f"  adaptive_frequency: {self.adaptive_frequency.enabled}\n" \
+        f"  equal_snr: {self.equal_snr.enabled}"
+
+    def adaptive_frequency_parameters(self):
+        return self.adaptive_frequency.parameters()
+
+    def adaptive_frequency_state_dict(self):
+        return self.adaptive_frequency.state_dict()
+
+    def load_adaptive_frequency_state_dict(self, state_dict):
+        self.adaptive_frequency.load_state_dict(state_dict)
+
+    def initialize_adaptive_frequency_for_shape(self, shape, device, dtype=th.float32):
+        self.adaptive_frequency.initialize_for_shape(shape, device, dtype)
+
+    def equal_snr_parameters(self):
+        return self.equal_snr.parameters()
+
+    def equal_snr_state_dict(self):
+        return self.equal_snr.state_dict()
+
+    def load_equal_snr_state_dict(self, state_dict):
+        self.equal_snr.load_state_dict(state_dict)
+
+    def synchronize_adaptive_frequency_gradients(self):
+        if not (dist.is_available() and dist.is_initialized()):
+            return
+        world_size = dist.get_world_size()
+        for param in self.adaptive_frequency_parameters():
+            if param.grad is not None:
+                dist.all_reduce(param.grad, op=dist.ReduceOp.SUM)
+                param.grad.div_(world_size)
 
     def q_mean_variance(self, x_start, t):
         """
@@ -232,9 +272,15 @@ class GaussianDiffusion:
         if noise is None:
             noise = th.randn_like(x_start)
         assert noise.shape == x_start.shape
+        alpha = _extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start.shape)
+        sigma = _extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape)
+        if self.adaptive_frequency.enabled:
+            return self.adaptive_frequency.q_sample(x_start, t, noise, alpha, sigma)
+        if self.equal_snr.enabled:
+            return self.equal_snr.q_sample(x_start, t, noise, alpha, sigma)
         return (
-            _extract_into_tensor(self.sqrt_alphas_cumprod, t, x_start.shape) * x_start
-            + _extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise
+            alpha * x_start
+            + sigma * noise
         )
 
     def q_posterior_mean_variance(self, x_start, x_t, t):
@@ -345,15 +391,27 @@ class GaussianDiffusion:
 
     def _predict_xstart_from_eps(self, x_t, t, eps):
         assert x_t.shape == eps.shape
+        alpha = _extract_into_tensor(self.sqrt_alphas_cumprod, t, x_t.shape)
+        sigma = _extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_t.shape)
+        if self.adaptive_frequency.enabled:
+            return self.adaptive_frequency.predict_xstart_from_eps(x_t, eps, alpha, sigma, t=t)
+        if self.equal_snr.enabled:
+            raise NotImplementedError("EqualSNR expects predict_xstart=True")
         return (
-            _extract_into_tensor(self.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t
-            - _extract_into_tensor(self.sqrt_recipm1_alphas_cumprod, t, x_t.shape) * eps
+            x_t / alpha
+            - sigma / alpha * eps
         )
 
     def _predict_eps_from_xstart(self, x_t, t, pred_xstart):
+        alpha = _extract_into_tensor(self.sqrt_alphas_cumprod, t, x_t.shape)
+        sigma = _extract_into_tensor(self.sqrt_one_minus_alphas_cumprod, t, x_t.shape)
+        if self.adaptive_frequency.enabled:
+            return self.adaptive_frequency.predict_eps_from_xstart(x_t, pred_xstart, alpha, sigma, t=t)
+        if self.equal_snr.enabled:
+            return self.equal_snr.predict_eps_from_xstart(x_t, pred_xstart, alpha, sigma)
         return (
-            _extract_into_tensor(self.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t - pred_xstart
-        ) / _extract_into_tensor(self.sqrt_recipm1_alphas_cumprod, t, x_t.shape)
+            x_t / alpha - pred_xstart
+        ) / (sigma / alpha)
 
     def condition_mean(self, cond_fn, p_mean_var, x, t, model_kwargs=None):
         """
@@ -411,6 +469,8 @@ class GaussianDiffusion:
                  - 'sample': a random sample from the model.
                  - 'pred_xstart': a prediction of x_0.
         """
+        if self.equal_snr.enabled:
+            raise NotImplementedError("EqualSNR sampling requires DDIM/Algorithm 2; standard DDPM sampling is not valid")
         out = self.p_mean_variance(
             model,
             x,
@@ -499,6 +559,8 @@ class GaussianDiffusion:
             img = noise
         else:
             img = th.randn(*shape, device=device)
+            if self.equal_snr.enabled:
+                img = self.equal_snr.colored_noise(img)
         indices = list(range(self.num_timesteps))[::-1]
 
         if progress:
@@ -561,10 +623,30 @@ class GaussianDiffusion:
         )
         # Equation 12.
         noise = th.randn_like(x)
-        mean_pred = (
-            out["pred_xstart"] * th.sqrt(alpha_bar_prev)
-            + th.sqrt(1 - alpha_bar_prev - sigma ** 2) * eps
-        )
+        if self.adaptive_frequency.enabled:
+            if eta != 0.0:
+                raise NotImplementedError("adaptive_frequency DDIM currently supports eta=0 only")
+            mean_pred = self.adaptive_frequency.ddim_step(
+                out["pred_xstart"],
+                eps,
+                th.sqrt(alpha_bar_prev),
+                th.sqrt(1 - alpha_bar_prev),
+                t=t,
+            )
+        elif self.equal_snr.enabled:
+            if eta != 0.0:
+                raise NotImplementedError("EqualSNR DDIM currently supports eta=0 only")
+            mean_pred = self.equal_snr.ddim_step(
+                out["pred_xstart"],
+                eps,
+                th.sqrt(alpha_bar_prev),
+                th.sqrt(1 - alpha_bar_prev),
+            )
+        else:
+            mean_pred = (
+                out["pred_xstart"] * th.sqrt(alpha_bar_prev)
+                + th.sqrt(1 - alpha_bar_prev - sigma ** 2) * eps
+            )
         nonzero_mask = (
             (t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
         )  # no noise when t == 0
@@ -667,6 +749,8 @@ class GaussianDiffusion:
             img = noise
         else:
             img = th.randn(*shape, device=device)
+            if self.equal_snr.enabled:
+                img = self.equal_snr.colored_noise(img)
         indices = list(range(self.num_timesteps))[::-1]
 
         if progress:
@@ -798,7 +882,12 @@ class GaussianDiffusion:
                 ModelMeanType.EPSILON: noise,
             }[self.model_mean_type]
             assert model_output.shape == target.shape == x_start.shape
-            terms["mse"] = mean_flat((target - model_output) ** 2)
+            if self.equal_snr.enabled:
+                if self.model_mean_type != ModelMeanType.START_X:
+                    raise ValueError("EqualSNR training requires predict_xstart=True")
+                terms["mse"] = self.equal_snr.xstart_loss(x_start, model_output)
+            else:
+                terms["mse"] = mean_flat((target - model_output) ** 2)
             if "vb" in terms:
                 terms["loss"] = terms["mse"] + terms["vb"]
             else:

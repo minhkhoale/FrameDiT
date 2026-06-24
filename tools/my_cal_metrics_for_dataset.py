@@ -163,7 +163,13 @@ def infinite_loader(loader):
 def get_num_frames(video_dir: str) -> int:
     # get abitrary video file in the folder
     import os
-    video_files = [f for f in os.listdir(video_dir) if f.endswith(('.mp4', '.avi', '.mov', '.mkv'))]
+    video_files = [
+        os.path.relpath(os.path.join(root, f), video_dir)
+        for root, _, files in os.walk(video_dir)
+        for f in files
+        if f.lower().endswith(('.mp4', '.avi', '.mov', '.mkv'))
+    ]
+    # video_files = [f for f in os.listdir(video_dir) if f.endswith()]
     if len(video_files) == 0:
         raise ValueError(f'No video files found in {video_dir}')
     video_path = os.path.join(video_dir, video_files[0])
@@ -218,3 +224,56 @@ if __name__ == "__main__":
 
        
     
+"""
+python tools/my_cal_metrics_for_dataset.py \
+    --real_data_path ~/scratch/temporal_diffusion/datasets/video/ucf101/reconstruction_128 \
+    --fake_data_path sample/ucf101128_adaptive_schedule/001-MatLatte-B-64-256-2-F16S3-ucf101128-Compile-Amp-loadlatent/checkpoints_0500000 \
+    --resolution 128 \
+    --real-sample-factor 6 \
+    --verbose \
+    --seed 1024
+    
+    
+python tools/my_cal_metrics_for_dataset.py \
+    --real_data_path ~/scratch/temporal_diffusion/datasets/video/ucf101/reconstruction_128 \
+    --fake_data_path sample/ucf101128_adaptive_schedule/003-MatLatte-B-64-256-2-F16S3-ucf101128-Compile-Amp-loadlatent/checkpoints_0500000 \
+    --resolution 128 \
+    --real-sample-factor 3 \
+    --verbose \
+    --seed 1024 \
+; python tools/my_cal_metrics_for_dataset.py \
+    --real_data_path ~/scratch/temporal_diffusion/datasets/video/ucf101/reconstruction_128 \
+    --fake_data_path sample/ucf101128_adaptive_schedule/003-MatLatte-B-64-256-2-F16S3-ucf101128-Compile-Amp-loadlatent/checkpoints_0500000 \
+    --resolution 128 \
+    --real-sample-factor 4 \
+    --verbose \
+    --seed 1024 \
+; python tools/my_cal_metrics_for_dataset.py \
+    --real_data_path ~/scratch/temporal_diffusion/datasets/video/ucf101/reconstruction_128 \
+    --fake_data_path sample/ucf101128_adaptive_schedule/003-MatLatte-B-64-256-2-F16S3-ucf101128-Compile-Amp-loadlatent/checkpoints_0500000 \
+    --resolution 128 \
+    --real-sample-factor 5 \
+    --verbose \
+    --seed 1024 \
+; python tools/my_cal_metrics_for_dataset.py \
+    --real_data_path ~/scratch/temporal_diffusion/datasets/video/ucf101/reconstruction_128 \
+    --fake_data_path sample/ucf101128_adaptive_schedule/003-MatLatte-B-64-256-2-F16S3-ucf101128-Compile-Amp-loadlatent/checkpoints_0500000 \
+    --resolution 128 \
+    --real-sample-factor 6 \
+    --verbose \
+    --seed 1024 \
+; python tools/my_cal_metrics_for_dataset.py \
+    --real_data_path ~/scratch/temporal_diffusion/datasets/video/ucf101/reconstruction_128 \
+    --fake_data_path sample/ucf101128_adaptive_schedule/003-MatLatte-B-64-256-2-F16S3-ucf101128-Compile-Amp-loadlatent/checkpoints_0500000 \
+    --resolution 128 \
+    --real-sample-factor 2 \
+    --verbose \
+    --seed 1024 \
+; python tools/my_cal_metrics_for_dataset.py \
+    --real_data_path ~/scratch/temporal_diffusion/datasets/video/ucf101/reconstruction_128 \
+    --fake_data_path sample/ucf101128_adaptive_schedule/003-MatLatte-B-64-256-2-F16S3-ucf101128-Compile-Amp-loadlatent/checkpoints_0500000 \
+    --resolution 128 \
+    --real-sample-factor 1 \
+    --verbose \
+    --seed 1024
+"""

@@ -69,3 +69,9 @@ if __name__ == '__main__':
     assert configs.data_path is not None, "data_path should be specified in the config file"
 
     preprocess_latent(configs)
+
+
+"""
+python preprocess_latent.py --save-path /scratch/s224075134/temporal_diffusion/datasets/video/ucf101_latent_32_kl_f8_autoencoder_bilinear_flip/ --config configs/ucf101/fusedmatlatteimg/ucf101_fusedmatlatteimg-xl-pixel_train.yaml
+python preprocess_latent.py --save-path /scratch/s224075134/temporal_diffusion/datasets/video/ucf101_latent_16_kl_f8_autoencoder_bilinear_flip/ --config configs/ucf101/fusedmatlatteimg/ucf101_fusedmatlatteimg-xl-pixel_train_128.yaml
+"""

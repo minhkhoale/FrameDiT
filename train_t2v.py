@@ -219,13 +219,24 @@ def main(args):
         sigma_small=args.sigma_small if 'sigma_small' in args else False,
         predict_xstart=args.predict_xstart if 'predict_xstart' in args else False,
         learn_sigma=args.learn_sigma if 'learn_sigma' in args else True,
+        adaptive_frequency=args.get('adaptive_frequency', False),
+        adaptive_frequency_gamma=args.get('adaptive_frequency_gamma', 0.5),
+        adaptive_frequency_learnable_gamma=args.get('adaptive_frequency_learnable_gamma', False),
+        adaptive_frequency_power_path=args.get('adaptive_frequency_power_path', None),
+        adaptive_frequency_power_exponent=args.get('adaptive_frequency_power_exponent', 2.0),
+        adaptive_frequency_num_temporal_bands=args.get('adaptive_frequency_num_temporal_bands', None),
+        adaptive_frequency_num_spatial_bands=args.get('adaptive_frequency_num_spatial_bands', None),
     )  # default: 1000 steps, linear noise schedule
+    for p in diffusion.adaptive_frequency_parameters():
+        p.data = p.data.to(device)
     logger.info(f'diffusion: {diffusion}')
 
     # # use pretrained model?
     logger.info('load pretrained model')
     if args.pretrained:
         checkpoint = torch.load(args.pretrained, map_location=lambda storage, loc: storage)
+        if isinstance(checkpoint, dict) and "adaptive_frequency" in checkpoint:
+            diffusion.load_adaptive_frequency_state_dict(checkpoint["adaptive_frequency"])
         if "ema" in checkpoint:  # supports checkpoints from train.py
             logger.info('Using ema ckpt!')
             checkpoint = checkpoint["ema"]
@@ -273,7 +284,11 @@ def main(args):
 
     logger.info(f"Model Parameters: {sum(p.numel() for p in model.parameters()):,}")
     print(f"Model Parameters: {sum(p.numel() for p in model.parameters()):,}")
-    opt = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=args.learning_rate, weight_decay=args.weight_decay if 'weight_decay' in args else 0)
+    opt = torch.optim.AdamW(
+        [p for p in model.parameters() if p.requires_grad] + list(diffusion.adaptive_frequency_parameters()),
+        lr=args.learning_rate,
+        weight_decay=args.weight_decay if 'weight_decay' in args else 0,
+    )
     lr_scheduler = get_scheduler(
         name="constant",
         optimizer=opt,
@@ -364,7 +379,13 @@ def main(args):
         ckpt_dirs = sorted(ckpt_dirs, key=lambda x: int(x.split(".")[0]))
         path = ckpt_dirs[-1]
         logger.info(f"Resuming from checkpoint {path}")
-        base_model.load_state_dict(torch.load(os.path.join(experiment_dir, 'checkpoints', path), map_location=device))
+        resume_checkpoint = torch.load(os.path.join(experiment_dir, 'checkpoints', path), map_location=device)
+        if isinstance(resume_checkpoint, dict) and "model" in resume_checkpoint:
+            base_model.load_state_dict(resume_checkpoint["model"])
+            if "adaptive_frequency" in resume_checkpoint:
+                diffusion.load_adaptive_frequency_state_dict(resume_checkpoint["adaptive_frequency"])
+        else:
+            base_model.load_state_dict(resume_checkpoint)
         train_steps = int(path.split(".")[0])
 
         first_epoch = train_steps // num_update_steps_per_epoch
@@ -458,6 +479,8 @@ def main(args):
 
                 # logger.info(f'grad temporal_transformer_blocks.14.attn1.content_gate.proj.weight - mean: {model.module.temporal_transformer_blocks[14].attn1.to_q.lora_A.default.weight.grad.mean().item()}, std: {model.module.temporal_transformer_blocks[14].attn1.to_q.lora_A.default.weight.grad.std().item()}')
             
+                diffusion.synchronize_adaptive_frequency_gradients()
+
                 if use_scaler:
                     scaler.step(opt)
                     scaler.update()
@@ -549,7 +572,8 @@ def main(args):
                     checkpoint = {
                         "model": base_model.state_dict(),
                         "ema": ema.state_dict(),
-                        "train_steps": train_steps
+                        "train_steps": train_steps,
+                        "adaptive_frequency": diffusion.adaptive_frequency_state_dict(),
                     }
                     checkpoint_path = f"{checkpoint_dir}/{train_steps:07d}.pt"
                     torch.save(checkpoint, checkpoint_path)
