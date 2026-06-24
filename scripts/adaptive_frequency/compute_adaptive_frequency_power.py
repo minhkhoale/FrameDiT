@@ -7,6 +7,7 @@ by adaptive schedulers and pre-binned statistics compatible with
 diffusion.adaptive_frequency:
 
     frequency_power_mean[F, H, W]
+    channel_frequency_power_mean[C, F, H, W]
     shape_fhw[3]
     C_mean[temporal_band, spatial_band]
     num_frequencies[temporal_band, spatial_band]
@@ -325,6 +326,11 @@ def fft_power_bcfhw(video_bcfhw: np.ndarray) -> np.ndarray:
     return np.mean(np.abs(coeffs) ** 2, axis=(0, 1)).astype(np.float64)
 
 
+def fft_power_by_channel_bcfhw(video_bcfhw: np.ndarray) -> np.ndarray:
+    coeffs = np.fft.fftn(video_bcfhw, axes=(-3, -2, -1), norm="ortho")
+    return np.mean(np.abs(coeffs) ** 2, axis=0).astype(np.float64)
+
+
 def frequency_grids(frames: int, height: int, width: int) -> tuple[np.ndarray, np.ndarray]:
     ft = np.fft.fftfreq(frames) * frames
     fy = np.fft.fftfreq(height) * height
@@ -457,7 +463,9 @@ def main() -> None:
 
     rng = np.random.default_rng(args.seed)
     power_sum = None
+    channel_power_sum = None
     shape_fhw = None
+    num_channels = None
     processed = 0
     skipped = []
     for path in iter_progress(paths):
@@ -470,14 +478,21 @@ def main() -> None:
             if input_kind == "latent":
                 array = sample_frames_bcfhw(array, args.num_frames, args.frame_interval, args.temporal_sample, rng)
             cur_shape = tuple(int(dim) for dim in array.shape[-3:])
+            cur_channels = int(array.shape[1])
             if shape_fhw is None:
                 shape_fhw = cur_shape
+                num_channels = cur_channels
                 power_sum = np.zeros(shape_fhw, dtype=np.float64)
+                channel_power_sum = np.zeros((cur_channels, *shape_fhw), dtype=np.float64)
             elif cur_shape != shape_fhw:
                 raise ValueError(f"expected [F,H,W]={shape_fhw}, got {cur_shape}")
+            elif cur_channels != num_channels:
+                raise ValueError(f"expected {num_channels} channels, got {cur_channels}")
 
             assert power_sum is not None
+            assert channel_power_sum is not None
             power_sum += fft_power_bcfhw(array)
+            channel_power_sum += fft_power_by_channel_bcfhw(array)
         except Exception as exc:
             reason = f"{type(exc).__name__}: {exc}"
             skipped.append({"path": str(path), "reason": reason})
@@ -487,7 +502,9 @@ def main() -> None:
 
     if power_sum is None or shape_fhw is None or processed == 0:
         raise ValueError(f"No valid inputs were processed; skipped {len(skipped)} files")
+    assert channel_power_sum is not None
     frequency_power_mean = np.maximum(power_sum / max(processed, 1), args.eps)
+    channel_frequency_power_mean = np.maximum(channel_power_sum / max(processed, 1), args.eps)
     c_mean, counts, temporal_edges, spatial_edges = compute_banded_stats(
         frequency_power_mean,
         args.num_temporal_bands,
@@ -505,6 +522,7 @@ def main() -> None:
     np.savez_compressed(
         npz_path,
         frequency_power_mean=frequency_power_mean,
+        channel_frequency_power_mean=channel_frequency_power_mean,
         shape_fhw=np.asarray(shape_fhw, dtype=np.int64),
         C_mean=c_mean,
         num_frequencies=counts,
@@ -551,6 +569,18 @@ python scripts/adaptive_frequency/compute_adaptive_frequency_power.py \
     --num-frames 16 \
     --frame-interval 3 \
     --num-temporal-bands 8 \
+    --num-temporal-bands 4 \
+    --max-items 3000
+
+python scripts/adaptive_frequency/compute_adaptive_frequency_power.py \
+    --latent-dir /scratch/s224075134/temporal_diffusion/datasets/video/ucf101_latent_32_kl_f8_autoencoder_bilinear_flip \
+    --latent-format ucf101_gaussian \
+    --posterior-stat sample \
+    --output-dir results_adaptive_schedule/ucf101256/adaptive_frequency_power \
+    --output-name dataset_prior_frequency_stats \
+    --num-frames 16 \
+    --frame-interval 3 \
+    --num-temporal-bands 12 \
     --num-temporal-bands 4 \
     --max-items 3000
 """
