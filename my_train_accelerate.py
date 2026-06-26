@@ -200,7 +200,7 @@ def main(args):
     diffusion = create_diffusion(
         name=args.diffusion_name if "diffusion_name" in args else "gaussian_diffusion",
         timestep_respacing=None,
-        noise_schedule="linear",
+        noise_schedule=args.noise_schedule if "noise_schedule" in args else "linear",
         use_kl=False,
         sigma_small=args.sigma_small if "sigma_small" in args else False,
         predict_xstart=args.predict_xstart if "predict_xstart" in args else False,
