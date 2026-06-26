@@ -1,5 +1,5 @@
 from .autoencoder_kl import AutoencoderKLWrapper
-#from .dc_ae import MyAutoencoderDC
+from .dc_ae import MyAutoencoderDC
 from .videovae import VideoVAE
 from .titok_kl import TiTok_KL
 import torch

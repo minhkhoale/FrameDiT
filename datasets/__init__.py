@@ -21,6 +21,7 @@ from .taichi_image_latent_datasets import TaichiImagesLatent
 from .kinetics_600_dataset import Kinetics600
 from .latent_text_video_dataset import LatentTextVideoDataset
 from .openvid import OpenVidLatentTextDataset
+from .dmlab_latent_dataset import DMLabLatent   
 
 def get_dataset(args):
     temporal_sample = video_transforms.TemporalRandomCrop(args.num_frames * args.frame_interval) # 16 1
@@ -62,6 +63,10 @@ def get_dataset(args):
             ])
             temporal_sample = None
             datset_class = FaceForensics
+        case 'dmlab':
+            if args.load_latent:
+                transform = transforms.Compose([])
+                datset_class = DMLabLatent
         case 'ucf101':
             if args.load_latent:
                 transform = transforms.Compose([])

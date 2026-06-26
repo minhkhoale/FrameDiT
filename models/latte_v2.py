@@ -238,7 +238,7 @@ class LatteV2(nn.Module):
         self.x_embedder = PatchEmbed(input_size, patch_size, in_channels, hidden_size, bias=True)
         self.t_embedder = TimestepEmbedder(hidden_size)
 
-        if self.extras == 2:
+        if self.extras in [2, 3]:
             self.y_embedder = LabelEmbedder(num_classes, hidden_size, class_dropout_prob)
         if self.extras == 78: # timestep + text_embedding
             self.text_embedding_projection = nn.Sequential(
@@ -326,23 +326,29 @@ class LatteV2(nn.Module):
         Forward pass of LatteV2.
         x: (N, F, C, H, W) tensor of video inputs
         t: (N,F) tensor of diffusion timesteps
-        y: (N,) tensor of class labels
+        y: (N,F) tensor of class labels
         """
         if use_fp16:
             x = x.to(dtype=torch.float16)
+        
+        if t.ndim == 1:
+            t = repeat(t, 'n -> n f', f=self.num_frames)
 
         batches, frames, channels, high, weight = x.shape 
         x = rearrange(x, 'b f c h w -> (b f) c h w')
         x = self.x_embedder(x) + self.pos_embed
-        t = self.t_embedder(t, use_fp16=use_fp16)                  
-
+        t = self.t_embedder(t, use_fp16=use_fp16)
         timestep_spatial = repeat(rearrange(t, 'b f d -> (b f) d'), 'b d -> b n d', n=self.pos_embed.shape[1])
         timestep_temp = repeat(t, 'b f d -> (b n) f d', n=self.pos_embed.shape[1])
 
         if self.extras == 2:
             y = self.y_embedder(y, self.training)
-            y_spatial = repeat(y, 'b d -> (b f) n d', n=self.temp_embed.shape[1], f=self.pos_embed.shape[1])
-            y_temp = repeat(y, 'b d -> (b n) f d', n=self.temp_embed.shape[1], f=self.pos_embed.shape[1])
+            y_spatial = repeat(y, 'b d -> (b f) n d', n=self.pos_embed.shape[1], f=self.pos_embed.shape[1])
+            y_temp = repeat(y, 'b d -> (b n) f d', n=self.pos_embed.shape[1], f=self.pos_embed.shape[1])
+        elif self.extras == 3:
+            y = rearrange(self.y_embedder(rearrange(y, 'b f -> (b f)'), self.training), '(b f) d -> b f d', b=batches)
+            y_spatial = repeat(y, 'b f d -> (b f) n d', n=self.pos_embed.shape[1])
+            y_temp = repeat(y, 'b f d -> (b n) f d', n=self.pos_embed.shape[1])
         elif self.extras == 78:
             text_embedding = self.text_embedding_projection(text_embedding.reshape(batches, -1))
             text_embedding_spatial = repeat(text_embedding, 'n d -> (n c) d', c=self.temp_embed.shape[1])
@@ -350,12 +356,17 @@ class LatteV2(nn.Module):
 
         for i in range(0, len(self.blocks), 2):
             spatial_block, temp_block = self.blocks[i:i+2]
-            if self.extras == 2:
-                c = timestep_spatial + y_spatial
-            elif self.extras == 78:
-                c = timestep_spatial + text_embedding_spatial
-            else:
-                c = timestep_spatial
+
+            match self.extras:
+                case 1:  # timestep only
+                    c = timestep_spatial
+                # class
+                case 2 | 3:
+                    c = timestep_spatial + y_spatial
+                case 78:
+                    c = timestep_spatial + text_embedding_spatial
+                case _:
+                    raise NotImplementedError()
 
             x  = spatial_block(x, c)
 
@@ -364,20 +375,30 @@ class LatteV2(nn.Module):
             if i == 0:
                 x = x + self.temp_embed
 
-            if self.extras == 2:
-                c = timestep_temp + y_temp
-            elif self.extras == 78:
-                c = timestep_temp + text_embedding_temp
-            else:
-                c = timestep_temp
+            match self.extras:
+                case 1:  # timestep only
+                    c = timestep_temp
+                # class
+                case 2 | 3:
+                    c = timestep_temp + y_temp
+                case 78:
+                    c = timestep_temp + text_embedding_temp
+                case _:
+                    raise NotImplementedError()
 
             x = temp_block(x, c)
             x = rearrange(x, '(b t) f d -> (b f) t d', b=batches)
 
-        if self.extras == 2:
-            c = timestep_spatial + y_spatial
-        else:
-            c = timestep_spatial
+        match self.extras:
+            case 1:
+                c = timestep_spatial
+            case 2 | 3:
+                c = timestep_spatial + y_spatial
+            case 78:
+                c = timestep_spatial + text_embedding_spatial
+            case _:
+                raise NotImplementedError()
+
         x = self.final_layer(x, c)               
         x = self.unpatchify(x)                  
         x = rearrange(x, '(b f) c h w -> b f c h w', b=batches)
@@ -486,6 +507,9 @@ def LatteV2_L_4(**kwargs):
 def LatteV2_L_8(**kwargs):
     return LatteV2(depth=24, hidden_size=1024, patch_size=8, num_heads=16, **kwargs)
 
+def LatteV2_B_1(**kwargs):
+    return LatteV2(depth=12, hidden_size=768, patch_size=1, num_heads=12, **kwargs)
+
 def LatteV2_B_2(**kwargs):
     return LatteV2(depth=12, hidden_size=768, patch_size=2, num_heads=12, **kwargs)
 
@@ -504,31 +528,13 @@ def LatteV2_S_4(**kwargs):
 def LatteV2_S_8(**kwargs):
     return LatteV2(depth=12, hidden_size=384, patch_size=8, num_heads=6, **kwargs)
 
-def LatteV2_M_2(**kwargs):
-    return LatteV2(depth=12, hidden_size=1024, patch_size=2, num_heads=16, **kwargs)
-
-def LatteV2_M_2_8(**kwargs):
-    return LatteV2(depth=12, hidden_size=1024, patch_size=2, num_heads=8, **kwargs)
-
-def LatteV2_M_2_4(**kwargs):
-    return LatteV2(depth=12, hidden_size=1024, patch_size=2, num_heads=4, **kwargs)
-
-def LatteV2_M_2_1(**kwargs):
-    return LatteV2(depth=12, hidden_size=1024, patch_size=2, num_heads=1, **kwargs)
-
-def LatteV2_M_4(**kwargs):
-    return LatteV2(depth=12, hidden_size=1024, patch_size=4, num_heads=16, **kwargs)
-
-def LatteV2_M_8(**kwargs):
-    return LatteV2(depth=12, hidden_size=1024, patch_size=8, num_heads=16, **kwargs)
-
 
 LatteV2_models = {
     'LatteV2-XL/2': LatteV2_XL_2,  'LatteV2-XL/4': LatteV2_XL_4,  'LatteV2-XL/8': LatteV2_XL_8,
     'LatteV2-L/2':  LatteV2_L_2,   'LatteV2-L/4':  LatteV2_L_4,   'LatteV2-L/8':  LatteV2_L_8,
     'LatteV2-B/2':  LatteV2_B_2,   'LatteV2-B/4':  LatteV2_B_4,   'LatteV2-B/8':  LatteV2_B_8,
+    'LatteV2-B/1':  LatteV2_B_1,
     'LatteV2-S/2':  LatteV2_S_2,   'LatteV2-S/4':  LatteV2_S_4,   'LatteV2-S/8':  LatteV2_S_8,
-    'LatteV2-M/2':  LatteV2_M_2,   'LatteV2-M/2-8': LatteV2_M_2_8, 'LatteV2-M/2-4': LatteV2_M_2_4, 'LatteV2-M/2-1': LatteV2_M_2_1,
 }
 
 if __name__ == '__main__':

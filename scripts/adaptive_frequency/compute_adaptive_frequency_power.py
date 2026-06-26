@@ -583,4 +583,16 @@ python scripts/adaptive_frequency/compute_adaptive_frequency_power.py \
     --num-temporal-bands 12 \
     --num-temporal-bands 4 \
     --max-items 3000
+
+python scripts/adaptive_frequency/compute_adaptive_frequency_power.py \
+    --latent-dir /scratch/s224075134/temporal_diffusion/datasets/video/dmlab_latent_8_17035ae5/training \
+    --latent-format auto \
+    --posterior-stat sample \
+    --output-dir results_adaptive_schedule/dmlab64/adaptive_frequency_power \
+    --output-name dataset_prior_frequency_stats \
+    --num-frames 16 \
+    --frame-interval 1 \
+    --num-temporal-bands 8 \
+    --num-temporal-bands 4 \
+    --max-items 1000
 """

@@ -67,6 +67,81 @@ def maybe_barrier(use_dist):
         dist.barrier()
 
 
+def parse_action_sequence(action_sequence, num_frames):
+    if not action_sequence:
+        return None
+    actions = [int(action.strip()) for action in action_sequence.split(",") if action.strip()]
+    if len(actions) != num_frames:
+        raise ValueError(
+            f"--action-sequence must contain exactly {num_frames} comma-separated labels; got {len(actions)}"
+        )
+    return actions
+
+
+def load_action_files(action_path):
+    if not action_path:
+        return []
+    action_files = []
+    for root, _, files in os.walk(action_path):
+        for file_name in files:
+            if file_name.lower().endswith(".npz"):
+                action_files.append(os.path.join(root, file_name))
+    return sorted(action_files)
+
+
+def sample_action_sequences(action_files, batch_size, num_frames, rng):
+    if not action_files:
+        raise ValueError("No DMLab action .npz files found. Set --action-path or action_path in the config.")
+
+    sequences = []
+    for _ in range(batch_size):
+        action_file = action_files[int(rng.integers(0, len(action_files)))]
+        actions = np.load(action_file)["actions"]
+        if actions.ndim != 1:
+            actions = actions.reshape(-1)
+
+        if len(actions) >= num_frames:
+            start = int(rng.integers(0, len(actions) - num_frames + 1))
+            sequence = actions[start:start + num_frames]
+        else:
+            frame_indices = np.linspace(0, len(actions) - 1, num_frames, dtype=int)
+            sequence = actions[frame_indices]
+        sequences.append(sequence.astype(np.int64))
+
+    return np.stack(sequences)
+
+
+def build_condition_labels(args, batch_size, label_idx, device, use_cfg, action_files=None, rng=None):
+    if args.extras == 2:
+        class_label = args.class_label if args.class_label >= 0 else label_idx % args.num_classes
+        y = torch.full((batch_size,), class_label, dtype=torch.long, device=device)
+        if use_cfg:
+            y_null = torch.full((batch_size,), args.num_classes, dtype=torch.long, device=device)
+            y = torch.cat([y, y_null], dim=0)
+        return y, [f"class_{class_label}"] * batch_size
+
+    if args.extras == 3:
+        action_sequence = parse_action_sequence(args.action_sequence, args.num_frames)
+        if action_sequence is None:
+            if args.action_label >= 0:
+                y = torch.full((batch_size, args.num_frames), args.action_label, dtype=torch.long, device=device)
+                label_names = [f"action_{args.action_label}"] * batch_size
+            else:
+                action_sequences = sample_action_sequences(action_files, batch_size, args.num_frames, rng)
+                y = torch.tensor(action_sequences, dtype=torch.long, device=device)
+                label_names = ["actions_random"] * batch_size
+        else:
+            y = torch.tensor(action_sequence, dtype=torch.long, device=device).unsqueeze(0).repeat(batch_size, 1)
+            label_names = ["actions_" + "-".join(str(action) for action in action_sequence)] * batch_size
+
+        if use_cfg:
+            y_null = torch.full((batch_size, args.num_frames), args.num_classes, dtype=torch.long, device=device)
+            y = torch.cat([y, y_null], dim=0)
+        return y, label_names
+
+    return None, ["uncond"] * batch_size
+
+
 def create_npz_from_sample_folder(sample_dir, num=50_000):
     """
     Builds a single .npz file from a folder of .png samples.
@@ -164,6 +239,13 @@ def main(args):
     assert args.cfg_scale >= 1.0, "In almost all cases, cfg_scale be >= 1.0"
     print('args.cfg_scale', args.cfg_scale)
     using_cfg = args.cfg_scale > 1.0
+    action_files = None
+    action_rng = None
+    if args.extras == 3 and not args.action_sequence and args.action_label < 0:
+        action_files = load_action_files(args.get("action_path", ""))
+        if rank == 0:
+            print(f"Loaded {len(action_files)} DMLab action files from {args.get('action_path', '')}")
+        action_rng = np.random.default_rng(args.seed * world_size + rank if args.seed is not None else None)
 
     # Create folder to save samples:
     # model_string_name = args.model.replace("/", "-")
@@ -203,7 +285,7 @@ def main(args):
     pbar = range(iterations)
     pbar = tqdm(pbar) if rank == 0 else pbar
     total = n_existing_video
-    idx = 0
+    label_idx = 0
     for _ in pbar:
         # Sample inputs:
         if args.use_fp16:
@@ -216,16 +298,18 @@ def main(args):
         # Setup classifier-free guidance:
         if using_cfg:
             z = torch.cat([z, z], 0)
-            # y = torch.randint(0, args.num_classes, (n,), device=device)
-            y = torch.ones((n,), dtype=torch.long, device=device) * idx  # Use class 101 as the "null" class for CFG, since UCF101 has 101 classes
-            idx = (idx + 1)%100
-            y_null = torch.tensor([101] * n, device=device)
-            y = torch.cat([y, y_null], dim=0)
+            y, label_names = build_condition_labels(
+                args, n, label_idx, device, using_cfg, action_files=action_files, rng=action_rng
+            )
+            label_idx = (label_idx + 1) % args.num_classes
             model_kwargs = dict(y=y, cfg_scale=args.cfg_scale, use_fp16=args.use_fp16)
             sample_fn = model.forward_with_cfg
         else:
-            y=None
-            model_kwargs = dict(y=None, use_fp16=args.use_fp16)
+            y, label_names = build_condition_labels(
+                args, n, label_idx, device, using_cfg, action_files=action_files, rng=action_rng
+            )
+            label_idx = (label_idx + 1) % args.num_classes
+            model_kwargs = dict(y=y, use_fp16=args.use_fp16)
             sample_fn = model.forward
 
         # Sample images:
@@ -253,8 +337,7 @@ def main(args):
             index = i * world_size + rank + total
 
             if y is not None:
-                class_label = y[i].item()
-                sample_save_path = f"{sample_folder_dir}/{index:04d}_class_{class_label}.mp4"
+                sample_save_path = f"{sample_folder_dir}/{index:04d}_{label_names[i]}.mp4"
             else:
                 sample_save_path = f"{sample_folder_dir}/{index:04d}.mp4"
 
@@ -289,6 +372,10 @@ if __name__ == "__main__":
     parser.add_argument('--fps', type=int, help='Frames per second for video', default=8)
     parser.add_argument('--video-quality', type=int, help='Quality for video encoding (1-10)', default=9)
     parser.add_argument('--wandb-run-id', type=str, help='W&B run ID for logging', default='')
+    parser.add_argument('--class-label', type=int, default=-1, help='Fixed class label for extras=2; -1 cycles labels.')
+    parser.add_argument('--action-label', type=int, default=-1, help='Fixed per-frame action label for extras=3; -1 cycles labels.')
+    parser.add_argument('--action-sequence', type=str, default='', help='Comma-separated per-frame action labels for extras=3.')
+    parser.add_argument('--action-path', type=str, default='', help='Directory containing DMLab .npz action files for extras=3.')
 
     args = parser.parse_args()
     omega_conf = OmegaConf.load(args.config)
@@ -309,5 +396,10 @@ if __name__ == "__main__":
 
     omega_conf.per_proc_batch_size = args.batch_size
     omega_conf.num_fvd_samples = args.num_fvd_samples
+    omega_conf.class_label = args.class_label
+    omega_conf.action_label = args.action_label
+    omega_conf.action_sequence = args.action_sequence
+    if args.action_path:
+        omega_conf.action_path = args.action_path
 
     main(omega_conf)

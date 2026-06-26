@@ -387,6 +387,8 @@ def main(args):
                 raise NotImplementedError("T2V training is not supported in my_train_accelerate.py.")
             if args.extras == 2:
                 model_kwargs = dict(y=video_data["video_name"])
+            elif args.extras == 3:
+                model_kwargs = dict(y=video_data['action'])
             else:
                 model_kwargs = dict(y=None)
 
