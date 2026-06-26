@@ -91,6 +91,11 @@ def get_beta_schedule(beta_schedule, *, beta_start, beta_end, num_diffusion_time
         betas = 1.0 / np.linspace(
             num_diffusion_timesteps, 1, num_diffusion_timesteps, dtype=np.float64
         )
+    elif beta_schedule in ("cosine", "squaredcos_cap_v2"):
+        betas = betas_for_alpha_bar(
+            num_diffusion_timesteps,
+            lambda t: math.cos((t + 0.008) / 1.008 * math.pi / 2) ** 2,
+        )
     else:
         raise NotImplementedError(beta_schedule)
     assert betas.shape == (num_diffusion_timesteps,)
@@ -115,7 +120,7 @@ def get_named_beta_schedule(schedule_name, num_diffusion_timesteps):
             beta_end=scale * 0.02,
             num_diffusion_timesteps=num_diffusion_timesteps,
         )
-    elif schedule_name == "squaredcos_cap_v2":
+    elif schedule_name in ("cosine", "squaredcos_cap_v2"):
         return betas_for_alpha_bar(
             num_diffusion_timesteps,
             lambda t: math.cos((t + 0.008) / 1.008 * math.pi / 2) ** 2,
