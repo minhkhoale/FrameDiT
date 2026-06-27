@@ -148,12 +148,22 @@ class AdaptiveFrequencyTimesteps:
         if not values:
             values = [self.gamma(device=device).detach().flatten()]
         values = th.cat([v.to(device=device) for v in values])
+        fallback_gamma = float(th.sigmoid(th.tensor(_logit(self._fixed_gamma))).item())
+        values = th.nan_to_num(values, nan=fallback_gamma, posinf=1.0, neginf=0.0)
         return {
             "mean": values.mean().item(),
             "min": values.min().item(),
             "max": values.max().item(),
             "std": values.std(unbiased=False).item() if values.numel() > 1 else 0.0,
         }
+
+    def sanitize_parameters(self):
+        fill = _logit(self._fixed_gamma)
+        for param in self.parameters():
+            with th.no_grad():
+                finite = th.isfinite(param)
+                if not finite.all():
+                    param.masked_fill_(~finite, fill)
 
     def power_and_global_mean(self, shape, device, dtype):
         f, h, w = self._fhw_from_shape(shape)
@@ -204,15 +214,19 @@ class AdaptiveFrequencyTimesteps:
             gamma = self.gamma(device=device, dtype=dtype)
         elif self.gamma_mode == "frequency_bin":
             self._maybe_init_frequency_gamma(power, device, bin_map=bin_map, num_bins=num_bins)
-            gamma = th.sigmoid(self._raw_gamma_bins).to(device=device, dtype=dtype)
+            raw = th.nan_to_num(self._raw_gamma_bins, nan=_logit(self._fixed_gamma))
+            gamma = th.sigmoid(raw).to(device=device, dtype=dtype)
             if bin_map is not None:
                 gamma = gamma[bin_map]
         elif self.gamma_mode == "timestep":
             if t is None:
-                gamma = th.sigmoid(self._raw_gamma_timesteps[-1]).to(device=device, dtype=dtype)
+                raw = th.nan_to_num(self._raw_gamma_timesteps[-1], nan=_logit(self._fixed_gamma))
+                gamma = th.sigmoid(raw).to(device=device, dtype=dtype)
             else:
                 t_idx = t.clamp(0, self.num_train_timesteps - 1).long()
-                gamma = th.sigmoid(self._raw_gamma_timesteps.to(device=device)[t_idx]).to(dtype=dtype)
+                raw = self._raw_gamma_timesteps.to(device=device)[t_idx]
+                raw = th.nan_to_num(raw, nan=_logit(self._fixed_gamma))
+                gamma = th.sigmoid(raw).to(dtype=dtype)
         elif self.gamma_mode == "data_dependent":
             gamma = self._data_dependent_gamma(reference, device, dtype)
         else:
@@ -269,7 +283,7 @@ class AdaptiveFrequencyTimesteps:
         alpha2 = alpha.square()
         local_sigma2 = sigma2 / (sigma2 + alpha2 * ratio).clamp_min(self.eps)
         local_sigma = local_sigma2.clamp(0.0, 1.0).sqrt()
-        local_alpha = (1.0 - local_sigma2).clamp(0.0, 1.0).sqrt()
+        local_alpha = (1.0 - local_sigma2).clamp(self.eps, 1.0).sqrt()
         return local_alpha, local_sigma
 
     def q_sample(self, x_start, t, noise, alpha, sigma):

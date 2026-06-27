@@ -235,6 +235,9 @@ class GaussianDiffusion:
     def initialize_adaptive_frequency_for_shape(self, shape, device, dtype=th.float32):
         self.adaptive_frequency.initialize_for_shape(shape, device, dtype)
 
+    def sanitize_adaptive_frequency_parameters(self):
+        self.adaptive_frequency.sanitize_parameters()
+
     def equal_snr_parameters(self):
         return self.equal_snr.parameters()
 

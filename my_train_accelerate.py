@@ -401,19 +401,23 @@ def main(args):
 
                 if loss.isnan():
                     logger.warning("Loss is NaN, skipping this step.")
+                    opt.zero_grad()
                     continue
 
                 accelerator.backward(loss)
 
                 if accelerator.sync_gradients:
                     unwrapped_model = _unwrap_model(accelerator, model)
+                    trainable_params = list(model.parameters()) + adaptive_frequency_params + equal_snr_params
                     if train_steps < args.start_clip_iter:
-                        gradient_norm = clip_grad_norm_(unwrapped_model.parameters(), args.clip_max_norm, clip_grad=False)
+                        gradient_norm = clip_grad_norm_(trainable_params, args.clip_max_norm, clip_grad=False)
                     else:
-                        gradient_norm = accelerator.clip_grad_norm_(model.parameters(), args.clip_max_norm)
+                        gradient_norm = accelerator.clip_grad_norm_(trainable_params, args.clip_max_norm)
 
                     diffusion.synchronize_adaptive_frequency_gradients()
+                    diffusion.sanitize_adaptive_frequency_parameters()
                     opt.step()
+                    diffusion.sanitize_adaptive_frequency_parameters()
                     lr_scheduler.step()
                     opt.zero_grad()
                     update_ema(ema, unwrapped_model)
