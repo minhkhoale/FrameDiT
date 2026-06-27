@@ -22,18 +22,18 @@ frame_interval: 1
 fixed_spatial: False
 attention_bias: True
 learn_sigma: False
+predict_xstart: True
 extras: 3
 num_classes: 4
 
-# adaptive frequency schedule
-adaptive_frequency: True
-adaptive_frequency_gamma: 1.0 # initialization
-adaptive_frequency_learnable_gamma: True
-adaptive_frequency_gamma_mode: timestep
-adaptive_frequency_power_path: results_adaptive_schedule/dmlab64/adaptive_frequency_power_new/dataset_prior_frequency_stats.npz
-adaptive_frequency_power_exponent: 2.0
-adaptive_frequency_num_temporal_bands: 4
-adaptive_frequency_num_spatial_bands: 8
+# EqualSNR Fourier baseline
+diffusion_name: gaussian_diffusion
+equal_snr: True
+equal_snr_power_path: results_adaptive_schedule/dmlab64/adaptive_frequency_power_new/dataset_prior_frequency_stats.npz
+equal_snr_power_scale: 1.0
+equal_snr_power_exponent: 2.0
+equal_snr_use_channelwise: True
+equal_snr_calibrate_schedule: False
 
 # train config:
 load_from_ceph: False

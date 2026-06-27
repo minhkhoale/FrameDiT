@@ -34,11 +34,17 @@ def create_diffusion(
     equal_snr_power_path=None,
     equal_snr_power_scale=1.0,
     equal_snr_power_exponent=2.0,
+    equal_snr_use_channelwise=True,
     equal_snr_calibrate_schedule=False,
 ):
     betas = gd.get_named_beta_schedule(noise_schedule, diffusion_steps)
     if equal_snr and equal_snr_calibrate_schedule:
-        betas = calibrate_equal_snr_betas(betas, equal_snr_power_path, equal_snr_power_scale)
+        betas = calibrate_equal_snr_betas(
+            betas,
+            equal_snr_power_path,
+            equal_snr_power_scale,
+            use_channelwise=equal_snr_use_channelwise,
+        )
     if use_kl:
         loss_type = gd.LossType.RESCALED_KL
     elif rescale_learned_sigmas:
@@ -90,16 +96,17 @@ def create_diffusion(
             power_path=equal_snr_power_path,
             power_scale=equal_snr_power_scale,
             power_exponent=equal_snr_power_exponent,
+            use_channelwise=equal_snr_use_channelwise,
         ),
         # rescale_timesteps=rescale_timesteps,
     )
 
 
-def calibrate_equal_snr_betas(betas, power_path, power_scale):
+def calibrate_equal_snr_betas(betas, power_path, power_scale, use_channelwise=True):
     if not power_path:
         raise ValueError("equal_snr_calibrate_schedule requires equal_snr_power_path")
     with np.load(power_path) as data:
-        if "channel_frequency_power_mean" in data:
+        if use_channelwise and "channel_frequency_power_mean" in data:
             power = np.asarray(data["channel_frequency_power_mean"], dtype=np.float64)
         elif "frequency_power_mean" in data:
             power = np.asarray(data["frequency_power_mean"], dtype=np.float64)

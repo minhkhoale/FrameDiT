@@ -649,25 +649,36 @@ class VideoDataset(torch.utils.data.Dataset):
         if self.subsample_factor > 1 and self.load_n_consecutive is None:
             raise NotImplementedError("Subsampling requires load_n_consecutive to be set.")
 
+        print('start discovering')
         # Discover mp4 files (one file = one video)
         all_files = sorted(
             f for f in os.listdir(self._path)
             if os.path.isfile(os.path.join(self._path, f)) and os.path.splitext(f)[1].lower() in ('.mp4', '.mov', '.mkv', '.webm', '.avi')
         )
+        print('end discovering')
+
         if len(all_files) == 0:
             raise IOError("No video files found (mp4/mov/mkv/webm).")
+
+        if (max_size is not None) and (len(all_files) > max_size):
+            raw_idx = np.arange(len(all_files), dtype=np.int64)
+            np.random.RandomState(random_seed).shuffle(raw_idx)
+            raw_idx = np.sort(raw_idx[:max_size])
+            all_files = [all_files[i] for i in raw_idx]
 
         # Build per-video decoders + lengths
         self._video_files = [os.path.join(self._path, f) for f in all_files]
         self._decoders: List[_VideoDecoder] = []
         self._lengths: List[int] = []
 
+        print('start init decoders')
         # Initialize decoders and compute lengths (cheap with decord; might be slower with cv2/torchvision once)
         for vf in self._video_files:
             vd = _VideoDecoder(vf)
             L = vd.get_length()
             self._decoders.append(vd)
             self._lengths.append(L)
+        print('end init decoders')
 
         # Optionally discard short videos
         if self.discard_short_videos and self.load_n_consecutive:

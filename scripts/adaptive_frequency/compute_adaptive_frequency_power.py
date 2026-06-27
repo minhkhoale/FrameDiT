@@ -124,6 +124,7 @@ def load_latent(path: Path, key: str | None, layout: str, latent_format: str, po
         import torch
 
         payload = torch.load(path, map_location="cpu")
+        # print('payload', payload.shape)
         if isinstance(payload, torch.Tensor):
             if should_decode_ucf101_gaussian(payload, latent_format):
                 array = sample_ucf101_gaussian(payload, posterior_stat).detach().cpu().numpy()
@@ -475,6 +476,8 @@ def main() -> None:
                 if input_kind == "latent"
                 else load_video(path, args.num_frames, args.resolution)
             )
+            print('array', array.shape)
+
             if input_kind == "latent":
                 array = sample_frames_bcfhw(array, args.num_frames, args.frame_interval, args.temporal_sample, rng)
             cur_shape = tuple(int(dim) for dim in array.shape[-3:])
@@ -488,7 +491,7 @@ def main() -> None:
                 raise ValueError(f"expected [F,H,W]={shape_fhw}, got {cur_shape}")
             elif cur_channels != num_channels:
                 raise ValueError(f"expected {num_channels} channels, got {cur_channels}")
-
+            # print('array1', array.shape)
             assert power_sum is not None
             assert channel_power_sum is not None
             power_sum += fft_power_bcfhw(array)
@@ -519,6 +522,10 @@ def main() -> None:
     json_path = args.output_dir / f"{args.output_name}.json"
     png_path = args.output_dir / f"{args.output_name}.png"
 
+
+    print('frequency_power_mean', frequency_power_mean.shape)
+    print('channel_frequency_power_mean', channel_frequency_power_mean.shape)
+    # exit(0)
     np.savez_compressed(
         npz_path,
         frequency_power_mean=frequency_power_mean,
@@ -586,7 +593,7 @@ python scripts/adaptive_frequency/compute_adaptive_frequency_power.py \
 
 python scripts/adaptive_frequency/compute_adaptive_frequency_power.py \
     --latent-dir /scratch/s224075134/temporal_diffusion/datasets/video/dmlab_latent_8_17035ae5/training \
-    --latent-format auto \
+    --latent-format array \
     --posterior-stat sample \
     --output-dir results_adaptive_schedule/dmlab64/adaptive_frequency_power \
     --output-name dataset_prior_frequency_stats \
@@ -594,5 +601,5 @@ python scripts/adaptive_frequency/compute_adaptive_frequency_power.py \
     --frame-interval 1 \
     --num-temporal-bands 8 \
     --num-temporal-bands 4 \
-    --max-items 1000
+    --max-items 10
 """

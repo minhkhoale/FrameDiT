@@ -511,6 +511,7 @@ class EqualSNRFourier(AdaptiveFrequencyTimesteps):
         power_path=None,
         power_scale=1.0,
         power_exponent=2.0,
+        use_channelwise=True,
         eps=1e-8,
     ):
         super().__init__(
@@ -524,6 +525,7 @@ class EqualSNRFourier(AdaptiveFrequencyTimesteps):
             eps=eps,
         )
         self.power_scale = float(power_scale)
+        self.use_channelwise = bool(use_channelwise)
 
     def parameters(self):
         return []
@@ -559,14 +561,14 @@ class EqualSNRFourier(AdaptiveFrequencyTimesteps):
 
         f, h, w = self._fhw_from_shape(shape)
         c = int(shape[-3])
-        key = ("equal_snr", c, f, h, w, str(device), str(dtype))
+        key = ("equal_snr", self.use_channelwise, c, f, h, w, str(device), str(dtype))
         cached = self._cache.get(key)
         if cached is not None:
             return cached
 
         path = Path(self.power_path)
         data = np.load(path)
-        if "channel_frequency_power_mean" not in data:
+        if not self.use_channelwise or "channel_frequency_power_mean" not in data:
             return super().power_and_global_mean(shape, device, dtype)
 
         power = th.from_numpy(np.asarray(data["channel_frequency_power_mean"], dtype=np.float32))

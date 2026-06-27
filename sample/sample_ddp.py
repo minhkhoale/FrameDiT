@@ -26,6 +26,7 @@ import numpy as np
 import math
 import argparse
 import imageio
+import json
 from omegaconf import OmegaConf
 from models import get_models
 from einops import rearrange
@@ -94,6 +95,7 @@ def sample_action_sequences(action_files, batch_size, num_frames, rng):
         raise ValueError("No DMLab action .npz files found. Set --action-path or action_path in the config.")
 
     sequences = []
+    metadata = []
     for _ in range(batch_size):
         action_file = action_files[int(rng.integers(0, len(action_files)))]
         actions = np.load(action_file)["actions"]
@@ -102,13 +104,23 @@ def sample_action_sequences(action_files, batch_size, num_frames, rng):
 
         if len(actions) >= num_frames:
             start = int(rng.integers(0, len(actions) - num_frames + 1))
-            sequence = actions[start:start + num_frames]
+            frame_indices = np.arange(start, start + num_frames, dtype=np.int64)
+            sequence = actions[frame_indices]
         else:
+            start = 0
             frame_indices = np.linspace(0, len(actions) - 1, num_frames, dtype=int)
             sequence = actions[frame_indices]
         sequences.append(sequence.astype(np.int64))
+        metadata.append({
+            "condition_type": "dmlab_action_sequence",
+            "condition_source": "random_real_action_window",
+            "source_action_path": action_file,
+            "source_start": int(start),
+            "source_frame_indices": frame_indices.astype(np.int64).tolist(),
+            "action_sequence": sequence.astype(np.int64).tolist(),
+        })
 
-    return np.stack(sequences)
+    return np.stack(sequences), metadata
 
 
 def build_condition_labels(args, batch_size, label_idx, device, use_cfg, action_files=None, rng=None):
@@ -118,7 +130,8 @@ def build_condition_labels(args, batch_size, label_idx, device, use_cfg, action_
         if use_cfg:
             y_null = torch.full((batch_size,), args.num_classes, dtype=torch.long, device=device)
             y = torch.cat([y, y_null], dim=0)
-        return y, [f"class_{class_label}"] * batch_size
+        metadata = [{"condition_type": "class", "class_label": int(class_label)} for _ in range(batch_size)]
+        return y, [f"class_{class_label}"] * batch_size, metadata
 
     if args.extras == 3:
         action_sequence = parse_action_sequence(args.action_sequence, args.num_frames)
@@ -126,20 +139,31 @@ def build_condition_labels(args, batch_size, label_idx, device, use_cfg, action_
             if args.action_label >= 0:
                 y = torch.full((batch_size, args.num_frames), args.action_label, dtype=torch.long, device=device)
                 label_names = [f"action_{args.action_label}"] * batch_size
+                metadata = [{
+                    "condition_type": "dmlab_action_sequence",
+                    "condition_source": "fixed_action_label",
+                    "action_label": int(args.action_label),
+                    "action_sequence": [int(args.action_label)] * args.num_frames,
+                } for _ in range(batch_size)]
             else:
-                action_sequences = sample_action_sequences(action_files, batch_size, args.num_frames, rng)
+                action_sequences, metadata = sample_action_sequences(action_files, batch_size, args.num_frames, rng)
                 y = torch.tensor(action_sequences, dtype=torch.long, device=device)
                 label_names = ["actions_random"] * batch_size
         else:
             y = torch.tensor(action_sequence, dtype=torch.long, device=device).unsqueeze(0).repeat(batch_size, 1)
             label_names = ["actions_" + "-".join(str(action) for action in action_sequence)] * batch_size
+            metadata = [{
+                "condition_type": "dmlab_action_sequence",
+                "condition_source": "explicit_action_sequence",
+                "action_sequence": [int(action) for action in action_sequence],
+            } for _ in range(batch_size)]
 
         if use_cfg:
             y_null = torch.full((batch_size, args.num_frames), args.num_classes, dtype=torch.long, device=device)
             y = torch.cat([y, y_null], dim=0)
-        return y, label_names
+        return y, label_names, metadata
 
-    return None, ["uncond"] * batch_size
+    return None, ["uncond"] * batch_size, [None] * batch_size
 
 
 def create_npz_from_sample_folder(sample_dir, num=50_000):
@@ -209,6 +233,7 @@ def main(args):
         equal_snr_power_path=args.get('equal_snr_power_path', None),
         equal_snr_power_scale=args.get('equal_snr_power_scale', 1.0),
         equal_snr_power_exponent=args.get('equal_snr_power_exponent', 2.0),
+        equal_snr_use_channelwise=args.get('equal_snr_use_channelwise', True),
         equal_snr_calibrate_schedule=args.get('equal_snr_calibrate_schedule', False),
     )  # default: 1000 steps, linear noise schedule
     diffusion.initialize_adaptive_frequency_for_shape((1, args.num_frames, args.in_channels, latent_size, latent_size), device)
@@ -298,14 +323,14 @@ def main(args):
         # Setup classifier-free guidance:
         if using_cfg:
             z = torch.cat([z, z], 0)
-            y, label_names = build_condition_labels(
+            y, label_names, condition_metadata = build_condition_labels(
                 args, n, label_idx, device, using_cfg, action_files=action_files, rng=action_rng
             )
             label_idx = (label_idx + 1) % args.num_classes
             model_kwargs = dict(y=y, cfg_scale=args.cfg_scale, use_fp16=args.use_fp16)
             sample_fn = model.forward_with_cfg
         else:
-            y, label_names = build_condition_labels(
+            y, label_names, condition_metadata = build_condition_labels(
                 args, n, label_idx, device, using_cfg, action_files=action_files, rng=action_rng
             )
             label_idx = (label_idx + 1) % args.num_classes
@@ -343,6 +368,15 @@ def main(args):
 
             print('sample_save_path', sample_save_path)
             imageio.mimwrite(sample_save_path, sample, fps=8, quality=9)
+            if condition_metadata[i] is not None:
+                metadata_save_path = os.path.splitext(sample_save_path)[0] + ".json"
+                with open(metadata_save_path, "w") as f:
+                    json.dump({
+                        **condition_metadata[i],
+                        "sample_path": sample_save_path,
+                        "sample_index": int(index),
+                        "seed": None if args.seed is None else int(args.seed),
+                    }, f, indent=2)
         total += global_batch_size
 
     # Make sure all processes have finished saving their samples before attempting to convert to .npz

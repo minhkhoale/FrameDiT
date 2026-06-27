@@ -90,6 +90,7 @@ def cal_metrics(
         xflip=False,
         resolution=resolution,
         use_labels=False,
+        max_size=2048
     )
     args.generator_as_dataset = True
 

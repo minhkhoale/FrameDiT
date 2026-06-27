@@ -23,3 +23,4 @@ paper/qualitative_video
 sample/ucf101128_adaptive_schedule
 sample/ucf101256_adaptive_schedule
 sample/dmlab_adaptive_schedule
+sample/old_dmlab_adaptive_schedule

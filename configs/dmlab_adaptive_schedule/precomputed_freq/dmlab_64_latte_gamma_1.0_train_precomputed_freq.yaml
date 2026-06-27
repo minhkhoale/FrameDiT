@@ -29,7 +29,7 @@ num_classes: 4
 adaptive_frequency: True
 adaptive_frequency_gamma: 1.0
 adaptive_frequency_learnable_gamma: False
-adaptive_frequency_power_path: results_adaptive_schedule/dmlab64/adaptive_frequency_power/dataset_prior_frequency_stats.npz
+adaptive_frequency_power_path: results_adaptive_schedule/dmlab64/adaptive_frequency_power_new/dataset_prior_frequency_stats.npz
 adaptive_frequency_power_exponent:
 adaptive_frequency_num_temporal_bands: 4
 adaptive_frequency_num_spatial_bands: 8

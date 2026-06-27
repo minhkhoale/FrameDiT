@@ -217,6 +217,7 @@ def main(args):
         equal_snr_power_path=args.get("equal_snr_power_path", None),
         equal_snr_power_scale=args.get("equal_snr_power_scale", 1.0),
         equal_snr_power_exponent=args.get("equal_snr_power_exponent", 2.0),
+        equal_snr_use_channelwise=args.get("equal_snr_use_channelwise", True),
         equal_snr_calibrate_schedule=args.get("equal_snr_calibrate_schedule", False),
     )
     diffusion.initialize_adaptive_frequency_for_shape((1, args.num_frames, args.in_channels, args.latent_size, args.latent_size), device)
