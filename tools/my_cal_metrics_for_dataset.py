@@ -78,6 +78,7 @@ def cal_metrics(
         xflip=mirror,
         resolution=resolution,
         use_labels=False,
+        max_size=2048
     )
     fake_class_name = 'tools.utils.dataset.VideoDataset' if check_if_video_folder(fake_data_path) else 'tools.utils.dataset.VideoFramesFolderDataset'
     args.gen_dataset_kwargs = dnnlib.EasyDict(

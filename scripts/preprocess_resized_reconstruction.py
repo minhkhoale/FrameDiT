@@ -8,12 +8,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from datasets import get_dataset
 from decord import VideoReader, cpu
-from einops import rearrange
 from omegaconf import OmegaConf
 from torchvision import transforms
 from tqdm import tqdm
 
 from utils import save_batch_videos
+from vae import decode_video, encode_video, get_vae
 
 
 def get_video_fps(path, fallback_fps):
@@ -30,25 +30,17 @@ def get_video_fps(path, fallback_fps):
 
 
 def encode_decode_video(vae, video, max_size=64, use_mean=True):
-    B = video.shape[0]
-    flat_video = rearrange(video, "b f c h w -> (b f) c h w").contiguous()
-    chunks = flat_video.chunk((len(flat_video) + max_size - 1) // max_size, dim=0)
+    frames_per_chunk = max(1, max_size // video.shape[0])
+    chunks = video.chunk((video.shape[1] + frames_per_chunk - 1) // frames_per_chunk, dim=1)
     reconstructions = []
 
     for chunk in chunks:
         with torch.no_grad():
-            latent_dist = vae.encode(chunk.contiguous()).latent_dist
-            if use_mean and hasattr(latent_dist, "mode"):
-                latents = latent_dist.mode()
-            elif use_mean and hasattr(latent_dist, "mean"):
-                latents = latent_dist.mean
-            else:
-                latents = latent_dist.sample()
-            reconstruction = vae.decode(latents).sample
+            latents = encode_video(vae, chunk.contiguous(), sample_posterior=not use_mean)
+            reconstruction = decode_video(vae, latents)
             reconstructions.append(reconstruction)
 
-    reconstruction = torch.cat(reconstructions, dim=0)
-    return rearrange(reconstruction, "(b f) c h w -> b f c h w", b=B).contiguous()
+    return torch.cat(reconstructions, dim=1).contiguous()
 
 
 def save_video_pair(video, video_path, save_path, reconstruction_path, vae, args, output_name=None):
@@ -84,8 +76,6 @@ def preprocess_resized_reconstruction(args):
 
     vae = None
     if not args.no_reconstruction:
-        from vae import get_vae
-
         assert args.vae is not None, "vae config should be specified when saving reconstructions"
         vae = get_vae(OmegaConf.load(args.vae))
         vae.eval()
@@ -138,7 +128,8 @@ if __name__ == "__main__":
     configs.data_path = cli_args.data_path
     configs.save_path = cli_args.save_path
     configs.reconstruction_path = cli_args.reconstruction_path
-    configs.dataset = "ucf101_whole"
+    configs.dataset = configs.dataset if configs.dataset != 'ucf101' else 'ucf101_whole'
+    print('configs.dataset', configs.dataset)
     configs.image_size = cli_args.image_size
     configs.load_latent = False
     configs.fps = cli_args.fps
@@ -154,3 +145,4 @@ if __name__ == "__main__":
     assert configs.data_path is not None, "data_path should be specified"
 
     preprocess_resized_reconstruction(configs)
+

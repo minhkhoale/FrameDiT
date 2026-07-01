@@ -333,7 +333,8 @@ def main(args):
             y, label_names, condition_metadata = build_condition_labels(
                 args, n, label_idx, device, using_cfg, action_files=action_files, rng=action_rng
             )
-            label_idx = (label_idx + 1) % args.num_classes
+            if args.extras != 1:
+                label_idx = (label_idx + 1) % args.num_classes
             model_kwargs = dict(y=y, use_fp16=args.use_fp16)
             sample_fn = model.forward
 

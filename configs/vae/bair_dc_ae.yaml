@@ -16,4 +16,4 @@ in_channels: 3
 latent_channels: 32
 scaler: 0.42334
 upsample_block_type: pixel_shuffle
-pretrained_model_path: /scratch/s224075134/temporal_diffusion/FAR/pretrained/dcae/DCAE_BAIR_Res64-1a8547fb.pth
+pretrained_model_path: /scratch/s224075134/temporal_diffusion/FAR/dcae/DCAE_BAIR_Res64-1a8547fb.pth

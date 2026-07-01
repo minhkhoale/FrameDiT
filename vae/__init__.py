@@ -53,7 +53,17 @@ def scale_latents(model: torch.nn.Module, latents: torch.Tensor):
             raise NotImplementedError(f"VAE {type(model)} not implemented")
         
 
-def encode_video(model: torch.nn.Module, x: torch.Tensor):
+def _sample_or_mode(posterior, sample_posterior: bool):
+    if sample_posterior:
+        return posterior.sample()
+    if hasattr(posterior, "mode"):
+        return posterior.mode()
+    if hasattr(posterior, "mean"):
+        return posterior.mean
+    return posterior.sample()
+
+
+def encode_video(model: torch.nn.Module, x: torch.Tensor, sample_posterior: bool = True):
     """
     x: (B,F,C,H,W).
     Input range: [-1,1]
@@ -72,13 +82,13 @@ def encode_video(model: torch.nn.Module, x: torch.Tensor):
     with torch.no_grad():
         match model:
             case AutoencoderKLWrapper():
-                latents = model.encode(x).latent_dist.sample()
+                latents = _sample_or_mode(model.encode(x).latent_dist, sample_posterior)
             case MyAutoencoderDC():
                 latents = model.encode(x)
             case VideoVAE():
-                latents = model.encode(x).sample()
+                latents = _sample_or_mode(model.encode(x), sample_posterior)
             case TiTok_KL():
-                latents = model.encode(x, sample_posterior=True) #TODO: should we sample mean or posterior.
+                latents = model.encode(x, sample_posterior=sample_posterior)
             case _:
                 raise NotImplementedError(f"VAE {type(model)} not implemented")
             
@@ -99,6 +109,8 @@ def decode_video(model: torch.nn.Module, latents: torch.Tensor):
     """
     B,F,C,H,W = latents.shape
     match model:
+        case VideoVAE():
+            latents = rearrange(latents, 'b f c h w -> b c f h w').contiguous()
         case TiTok_KL():
             latents = rearrange(latents, 'b t (h w) c -> b t c h w', h=1)
         case _:
@@ -110,13 +122,20 @@ def decode_video(model: torch.nn.Module, latents: torch.Tensor):
                 x = model.decode(latents).sample
             case MyAutoencoderDC():
                 x = model.decode(latents)
+            case VideoVAE():
+                x = model.decode(latents, desired_length=F)
             case TiTok_KL():
-                x = x / model.scaler
+                latents = latents / model.scaler
                 x = model.decode(latents)
             case _:
                 raise NotImplementedError(f"VAE {type(model)} not implemented")
     
-    if model != TiTok_KL():
-        x = rearrange(x, '(b f) c h w -> b f c h w', b=B, f=F)
+    match model:
+        case VideoVAE():
+            x = rearrange(x, 'b c f h w -> b f c h w').contiguous()
+        case TiTok_KL():
+            pass
+        case _:
+            x = rearrange(x, '(b f) c h w -> b f c h w', b=B, f=F).contiguous()
     
     return x

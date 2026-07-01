@@ -498,6 +498,9 @@ def Latte_M_4(**kwargs):
 def Latte_M_8(**kwargs):
     return Latte(depth=12, hidden_size=1024, patch_size=8, num_heads=16, **kwargs)
 
+def Latte_B_1(**kwargs):
+    return Latte(depth=12, hidden_size=768, patch_size=1, num_heads=12, **kwargs)
+
 def Latte_B_2(**kwargs):
     return Latte(depth=12, hidden_size=768, patch_size=2, num_heads=12, **kwargs)
 
@@ -522,7 +525,7 @@ Latte_models = {
     'Latte-L/2':  Latte_L_2,   'Latte-L/4':  Latte_L_4,   'Latte-L/8':  Latte_L_8,
     'Latte-M/2':  Latte_M_2,   'Latte-M/4':  Latte_M_4,   'Latte-M/8':  Latte_M_8,
     'Latte-M/2-8':  Latte_M_2_8,   'Latte-M/2-4':  Latte_M_2_4,   'Latte-M/2-1':  Latte_M_2_1,
-    'Latte-B/2':  Latte_B_2,   'Latte-B/4':  Latte_B_4,   'Latte-B/8':  Latte_B_8,
+    'Latte-B/2':  Latte_B_2,   'Latte-B/4':  Latte_B_4,   'Latte-B/8':  Latte_B_8, 'Latte-B/1':  Latte_B_1,
     'Latte-S/2':  Latte_S_2,   'Latte-S/4':  Latte_S_4,   'Latte-S/8':  Latte_S_8,
 }
 
